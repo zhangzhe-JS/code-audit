@@ -75,7 +75,82 @@ export const TAGS = [
   'replaced-by',
   'business-check'
 ]
+
+
+/**报告数据的接口说明书 */
+
 /**
+ * @typedef {object} Report 整份数据
+ * @property {number} version
+ * @property {string} generatedAt  ISO 时间，如 2026-11-05T08:00:00.000Z
+ * @property {{name: string, version: string}} tool
+ * @property {Project} project
+ * @property {Item[]} items  按 id 排序
+ */
+
+/**
+ * @typedef {object} Project
+ * @property {string} name
+ * @property {string} root     绝对路径（整份数据里唯一的绝对路径）
+ * @property {string} rev      分析时的完整提交号
+ * @property {string[]} entries 入口文件，相对 root
+ */
+
+/**
+ * @typedef {object} Item 一个排查对象
+ * @property {string} id   file:路径 / export:路径#名字 / api:方法 路径
+ * @property {'file'|'export'|'api'} kind
+ * @property {string} target  文件路径（相对 root），或「方法 + 路径」
+ * @property {string} [name]  kind 为 export 时的导出名
+ * @property {string} status  STATUSES 之一          （scan 填）
+ * @property {Evidence[]} evidence 至少一条          （scan 填）
+ * @property {Ref[]} refs     所有引用，可以为空      （scan 填）
+ * @property {History|null} history  null = 还没跑 history
+ * @property {Verify|null} verify    null = 还没跑 verify
+ */
+
+/**
+ * @typedef {object} Evidence 一条证据
+ * @property {string} rule    哪条规则得出的，如 no-import
+ * @property {string} detail  人能看懂的说明
+ * @property {string} [tag]   TAGS 之一
+ */
+
+/**
+ * @typedef {object} Ref 一处引用
+ * @property {string} from  引用方文件，相对 root
+ * @property {number} line
+ * @property {'static'|'reexport'|'glob'|'dynamic'|'comment'|'config'} via
+ */
+
+/**
+ * @typedef {object} Commit
+ * @property {string} hash  完整提交号；报告里再截短显示
+ * @property {string} date  YYYY-MM-DD，按主线（first-parent）的日期
+ * @property {string} author
+ * @property {string} subject
+ */
+
+/**
+ * @typedef {object} History
+ * @property {Commit} introduced
+ * @property {Commit|null} lostRef  null = 从来没被引用过
+ * @property {{commit: Commit, change: 'add'|'remove', from: string}[]} timeline
+ */
+
+/**
+ * @typedef {object} Verify
+ * @property {string} rev
+ * @property {{ok: boolean, newWarnings: string[]}} build
+ * @property {{newFailures: string[]}} test
+ * @property {boolean} passed  删掉以后和基线一致
+ */
+
+
+
+
+/**
+ * @param {Report} data
  * 校验一份数据是否符合格式
  * @returns {string[]} 错误列表；空数组表示通过
  */
@@ -114,6 +189,7 @@ export function validate(data) {
         }
       })
     }
+    if (!Array.isArray(item.refs)) errors.push(`${at}.refs 必须是数组`)
     if (seen.has(item.id)) errors.push(`${at}.id 重复：${item.id}`)
     seen.add(item.id)
   })

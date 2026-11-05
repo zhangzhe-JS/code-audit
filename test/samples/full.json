@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "generatedAt": "2026-11-05T08:00:00.000Z",
+  "tool": { "name": "code-audit", "version": "1.0.0" },
+  "project": {
+    "name": "demo",
+    "root": "/tmp/demo",
+    "rev": "1111111111111111111111111111111111111111",
+    "entries": ["src/main.js"]
+  },
+  "items": [
+    {
+      "id": "export:src/utils/file.js#toBlob",
+      "kind": "export",
+      "target": "src/utils/file.js",
+      "name": "toBlob",
+      "status": "internal",
+      "evidence": [
+        {
+          "rule": "intra-call",
+          "detail": "外部无引用，但被同文件的 download() 调用"
+        }
+      ],
+      "refs": [],
+      "history": null,
+      "verify": null
+    },
+    {
+      "id": "file:src/utils/check.js",
+      "kind": "file",
+      "target": "src/utils/check.js",
+      "status": "dormant",
+      "evidence": [
+        { "rule": "commented-import", "detail": "main.js 里的 import 被注释" }
+      ],
+      "refs": [{ "from": "src/main.js", "line": 12, "via": "comment" }],
+      "history": null,
+      "verify": null
+    },
+    {
+      "id": "file:src/utils/math.js",
+      "kind": "file",
+      "target": "src/utils/math.js",
+      "status": "dead",
+      "evidence": [{ "rule": "no-import", "detail": "全项目没有引用" }],
+      "refs": [],
+      "history": {
+        "introduced": {
+          "hash": "2222222222222222222222222222222222222222",
+          "date": "2024-01-01",
+          "author": "alice",
+          "subject": "feat: 新增计算工具"
+        },
+        "lostRef": {
+          "hash": "3333333333333333333333333333333333333333",
+          "date": "2025-06-01",
+          "author": "bob",
+          "subject": "chore: 移除旧页面"
+        },
+        "timeline": [
+          {
+            "commit": {
+              "hash": "3333333333333333333333333333333333333333",
+              "date": "2025-06-01",
+              "author": "bob",
+              "subject": "chore: 移除旧页面"
+            },
+            "change": "remove",
+            "from": "src/views/Old.vue"
+          }
+        ]
+      },
+      "verify": {
+        "rev": "1111111111111111111111111111111111111111",
+        "build": { "ok": true, "newWarnings": [] },
+        "test": { "newFailures": [] },
+        "passed": true
+      }
+    }
+  ]
+}
