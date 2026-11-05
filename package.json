@@ -2,7 +2,9 @@
   "name": "code-audit",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "bin": {
+    "code-audit": "./bin/code-audit.js"
+  },
   "type": "module",
   "private": true,
   "engines": {

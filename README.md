@@ -39,7 +39,7 @@
 ```
 code-audit/
 ├─ bin/
-│  └─ fin-audit.js           # 命令行入口：解析参数，分发到各子命令
+│  └─ code-audit.js          # 命令行入口：解析参数，分发到各子命令
 ├─ src/
 │  ├─ commands/              # 子命令，每个命令一个文件
 │  │  ├─ scan.js             #   采集 + 判定，输出候选清单 JSON
@@ -99,17 +99,17 @@ code-audit/
 
 ```bash
 # 分析：只读
-node bin/fin-audit.js scan    --root ../path/to/project --profile <项目名>
-node bin/fin-audit.js history --root ../path/to/project --in scan.json
-node bin/fin-audit.js verify  --root ../path/to/project --in scan.json
-node bin/fin-audit.js report  --in scan.json --out reports/<项目名>/
+node bin/code-audit.js scan    --root ../path/to/project --profile <项目名>
+node bin/code-audit.js history --root ../path/to/project --in scan.json
+node bin/code-audit.js verify  --root ../path/to/project --in scan.json
+node bin/code-audit.js report  --in scan.json --out reports/<项目名>/
 
 # 单个文件的 git 历史
-node bin/fin-audit.js history --root ../path/to/project \
+node bin/code-audit.js history --root ../path/to/project \
   --file src/utils/xxx.js --pattern "utils/xxx" --rev <提交号>
 
 # 隔离：会改动目标项目，需要显式执行
-node bin/fin-audit.js quarantine --root ../path/to/project --in scan.json
+node bin/code-audit.js quarantine --root ../path/to/project --in scan.json
 ```
 
 ---
