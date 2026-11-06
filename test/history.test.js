@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRepo } from './helpers/repo.js'
 import { findIntroduced } from '../src/history/introduced.js'
+import { buildTimeline, findLostRef } from '../src/history/refs.js'
 
 test('找到文件最初被加入的提交', (t) => {
   const repo = createRepo()
@@ -43,4 +44,97 @@ test('文件不存在时返回 null', (t) => {
   repo.commit('init')
 
   assert.equal(findIntroduced(repo.root, 'src/none.js'), null)
+})
+// ---------- 引用时间线与失去引用 ----------
+
+test('时间线：记录引用的增加、删除和注释掉', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/x.js', 'export const x = 1\n')
+  repo.commit('新增 x', { date: '2024-01-01' })
+  repo.write('src/a.js', "import { x } from './utils/x.js'\n")
+  repo.commit('a 引用 x', { date: '2024-02-01' })
+  repo.write('src/b.js', "import { x } from '@/utils/x.js'\n")
+  repo.commit('b 引用 x', { date: '2024-03-01' })
+  repo.write('src/a.js', 'export {}\n')
+  repo.commit('a 去掉引用', { date: '2024-04-01' })
+  repo.write('src/b.js', "// import { x } from '@/utils/x.js'\n")
+  const last = repo.commit('b 注释掉引用', { date: '2024-05-01' })
+
+  const timeline = buildTimeline(repo.root, 'utils/x', { exclude: 'src/utils/x.js' })
+
+  assert.deepEqual(
+    timeline.map((e) => `${e.commit.date} ${e.change} ${e.from}`),
+    [
+      '2024-02-01 add src/a.js',
+      '2024-03-01 add src/b.js',
+      '2024-04-01 remove src/a.js',
+      '2024-05-01 remove src/b.js'
+    ]
+  )
+  assert.equal(findLostRef(timeline).hash, last)
+})
+
+test('分支上去掉引用再合并：失去引用是合并提交，日期是合并那天', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/x.js', '1\n')
+  repo.commit('新增 x', { date: '2024-01-01' })
+  repo.write('src/a.js', "import './utils/x.js'\n")
+  repo.commit('a 引用 x', { date: '2024-02-01' })
+
+  repo.run(['checkout', '-q', '-b', 'feat'])
+  repo.write('src/a.js', 'export {}\n')
+  repo.commit('分支上去掉引用', { date: '2024-03-01' })
+
+  repo.run(['checkout', '-q', 'main'])
+  repo.write('src/other.js', '1\n')
+  repo.commit('主线上的其他改动', { date: '2024-03-15' })
+  const merge = repo.merge('feat', '合并 feat', { date: '2024-04-01' })
+
+  const lost = findLostRef(buildTimeline(repo.root, 'utils/x', { exclude: 'src/utils/x.js' }))
+  assert.equal(lost.hash, merge)
+  assert.equal(lost.date, '2024-04-01') // 不是分支上的 03-01
+})
+
+test('从来没被引用：时间线为空，失去引用为 null', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/x.js', '1\n')
+  repo.commit('新增 x')
+
+  const timeline = buildTimeline(repo.root, 'utils/x', { exclude: 'src/utils/x.js' })
+  assert.deepEqual(timeline, [])
+  assert.equal(findLostRef(timeline), null)
+})
+
+test('pattern 里有正则特殊字符时，按字面匹配', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/routes/+page.js', '1\n')
+  repo.commit('新增页面', { date: '2024-01-01' })
+  repo.write('src/a.js', "import './routes/+page.js'\n")
+  repo.commit('a 引用页面', { date: '2024-02-01' })
+
+  const timeline = buildTimeline(repo.root, 'routes/+page', { exclude: 'src/routes/+page.js' })
+  assert.equal(timeline.length, 1)
+  assert.equal(timeline[0].from, 'src/a.js')
+})
+
+test('块注释包住的引用不算，行首块注释后面的代码仍算', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/x.js', '1\n')
+  repo.commit('新增 x', { date: '2024-01-01' })
+  repo.write('src/a.js', "/*\nimport './utils/x.js'\n*/\n")
+  repo.write('src/b.js', "/* eslint-disable */ import './utils/x.js'\n")
+  repo.commit('a 和 b', { date: '2024-02-01' })
+
+  const timeline = buildTimeline(repo.root, 'utils/x', { exclude: 'src/utils/x.js' })
+  assert.deepEqual(timeline.map((e) => e.from), ['src/b.js'])
 })

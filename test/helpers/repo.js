@@ -43,6 +43,16 @@ export function createRepo() {
       return run(['rev-parse', 'HEAD'])
     },
 
+    /** 用 --no-ff 合并分支（一定产生合并提交），返回合并提交的提交号 */
+    merge(branch, message, { date = '2024-01-01' } = {}) {
+      const time = `${date}T12:00:00`
+      run(['merge', '--no-ff', '-q', '-m', message, branch], {
+        GIT_AUTHOR_DATE: time,
+        GIT_COMMITTER_DATE: time
+      })
+      return run(['rev-parse', 'HEAD'])
+    },
+
     /** 删除整个临时仓库 */
     cleanup() {
       rmSync(root, { recursive: true, force: true })
