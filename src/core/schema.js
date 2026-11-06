@@ -44,6 +44,7 @@ export const KINDS = ['file', 'export', 'api']
  *                 （互相引用、但入口走不到的一组文件也属于这种）
  * - dead          死代码：引用已删除，或从未被引用。隔离 → 观察 → 删除
  */
+
 export const STATUSES = [
   'unknown',
   'external',
@@ -55,6 +56,19 @@ export const STATUSES = [
   'dead-only-ref',
   'dead'
 ]
+
+/** 每种状态的中文说明，报告和头注释里显示用 */
+export const STATUS_LABELS = Object.freeze({
+  unknown: '无法判定，需人工确认',
+  external: '在 import 图之外被使用',
+  pending: '其他分支在用',
+  dormant: '注释停用',
+  internal: '只在本文件内部使用',
+  live: '在用',
+  'test-only': '只有单测引用',
+  'dead-only-ref': '只被死代码引用',
+  dead: '无引用'
+})
 
 /**
  * 补充说明的标签：写在 evidence 里，不影响状态
@@ -148,6 +162,7 @@ export const VIAS = ['static', 'reexport', 'glob', 'dynamic', 'comment', 'config
  * @property {Commit} introduced
  * @property {Commit|null} lostRef  null = 从来没被引用过
  * @property {{commit: Commit, change: 'add'|'remove', from: string}[]} timeline
+ * @property {string[]} [paths]  文件用过的所有路径，从当前到最初；最后一个是原路径
  */
 
 /**
@@ -322,6 +337,11 @@ function validateHistory(h, at, err) {
     if (e.change !== 'add' && e.change !== 'remove') err(`${eat}.change 必须是 add 或 remove：${e.change}`)
     if (!isRelativePath(e.from)) err(`${eat}.from 必须是相对路径：${e.from}`)
   })
+  if (h.paths !== undefined) {
+    if (!Array.isArray(h.paths) || h.paths.length === 0 || !h.paths.every(isRelativePath)) {
+      err(`${at}.paths 必须是非空的相对路径数组`)
+    }
+  }
 }
 
 function validateVerify(v, at, err) {

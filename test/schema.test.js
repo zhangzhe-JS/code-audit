@@ -226,3 +226,25 @@ test('notes 为 null 也不通过（null 不等于没写）', () => {
   d.items[0].notes = null
   assert.match(validate(d).join(), /notes 必须是数组/)
 })
+// ---------- 状态说明、history.paths ----------
+
+test('每种状态都有中文说明', async () => {
+  const { STATUSES, STATUS_LABELS } = await import('../src/core/schema.js')
+  for (const s of STATUSES) assert.ok(STATUS_LABELS[s], `${s} 缺少说明`)
+  assert.equal(Object.keys(STATUS_LABELS).length, STATUSES.length)
+})
+
+test('history.paths 可以不写；写了必须是非空的相对路径数组', () => {
+  const d = sample()
+  d.items[0].history = { introduced: commit(), lostRef: null, timeline: [] }
+  assert.deepEqual(validate(d), [])
+
+  d.items[0].history.paths = ['src/legacy/a.js', 'src/a.js']
+  assert.deepEqual(validate(d), [])
+
+  d.items[0].history.paths = []
+  assert.match(validate(d).join(), /paths 必须是非空的相对路径数组/)
+
+  d.items[0].history.paths = ['/abs/a.js']
+  assert.match(validate(d).join(), /paths 必须是非空的相对路径数组/)
+})

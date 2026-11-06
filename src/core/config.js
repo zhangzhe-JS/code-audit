@@ -13,6 +13,8 @@ import { resolve } from 'node:path'
  *                                   （对应项目里 @/ 这类别名指向的目录）
  * @property {string[]} extensions   只在这些扩展名的文件里找引用方
  * @property {number} shortHashLength 报告里提交号显示几位
+ * @property {string} headerTitle    头注释的第一行（标题）
+ * @property {string[]} headerFooter 头注释最后的提示，每项一行；可以为空数组
  */
 
 /** @type {Readonly<Config>} */
@@ -26,7 +28,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     '.vue', '.svelte'
   ]),
   // git 默认 7 位，8 位在提交多的仓库里更不容易重复
-  shortHashLength: 8
+  shortHashLength: 8,
+  // 头注释的标题和结尾提示：不写具体路径，各项目可以改成自己的说法（比如写上隔离清单的位置）
+  headerTitle: '[DEPRECATED] 已隔离：观察期后删除',
+  headerFooter: Object.freeze(['业务代码禁止 import 本文件；需要恢复时请移回原路径，并同步更新隔离清单'])
 })
 
 /**
@@ -61,12 +66,20 @@ export function resolveConfig(overrides = {}) {
     errors.push('shortHashLength 必须是 4 到 40 之间的整数')
   }
 
+  if (typeof config.headerTitle !== 'string' || config.headerTitle.trim() === '') {
+    errors.push('headerTitle 必须是非空字符串')
+  }
+  if (!Array.isArray(config.headerFooter) || !config.headerFooter.every((l) => typeof l === 'string' && l.trim() !== '')) {
+    errors.push('headerFooter 必须是非空字符串组成的数组（可以是空数组）')
+  }
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
     ...config,
     sourceRoots: Object.freeze([...config.sourceRoots]),
-    extensions: Object.freeze([...config.extensions])
+    extensions: Object.freeze([...config.extensions]),
+    headerFooter: Object.freeze([...config.headerFooter])
   })
 }
 

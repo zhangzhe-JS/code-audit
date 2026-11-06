@@ -39,3 +39,12 @@ test('示例配置文件能正常加载', async () => {
   const c = await loadProfile(file)
   assert.ok(c.extensions.includes('.astro'))
 })
+
+test('头注释的标题和结尾提示可以配置，并校验', () => {
+  const c = resolveConfig({ headerTitle: '@deprecated', headerFooter: [] })
+  assert.equal(c.headerTitle, '@deprecated')
+  assert.deepEqual(c.headerFooter, [])
+  assert.throws(() => resolveConfig({ headerTitle: '  ' }), /headerTitle/)
+  assert.throws(() => resolveConfig({ headerFooter: ['ok', ''] }), /headerFooter/)
+  assert.throws(() => resolveConfig({ headerFooter: 'not array' }), /headerFooter/)
+})

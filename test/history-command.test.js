@@ -354,3 +354,12 @@ test('旧文件是空的、新文件有代码：不认作移动', (t) => {
 
   assert.equal(traceHistory({ root: repo.root, file: 'src/b/index.js' }).history.introduced.hash, added)
 })
+
+test('traceHistory：history 里带上 paths，头注释能显示原路径', (t) => {
+  const { repo } = quarantinedRepo()
+  t.after(() => repo.cleanup())
+
+  const r = traceHistory({ root: repo.root, file: 'src/utils/_deprecated/math.js' })
+  assert.deepEqual(r.history.paths, r.paths)
+  assert.equal(r.history.paths.at(-1), 'src/utils/math.js')
+})
