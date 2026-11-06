@@ -1,0 +1,8 @@
+{
+  "description": "引用被注释掉的文件是 dormant，不是 dead；只为副作用引入的文件算在用",
+  "entries": ["src/main.js"],
+  "items": [
+    { "id": "file:src/commented.js", "status": "dormant" },
+    { "id": "file:src/side-effect.js", "status": "live" }
+  ]
+}

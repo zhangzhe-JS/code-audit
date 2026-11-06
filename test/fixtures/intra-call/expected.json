@@ -1,0 +1,10 @@
+{
+  "description": "外部没人 import，但被同文件在用的函数调用，是 internal 不是 dead",
+  "entries": ["src/main.js"],
+  "items": [
+    { "id": "export:src/file.js#calledInside", "status": "internal" },
+    { "id": "export:src/file.js#unusedExport", "status": "dead" },
+    { "id": "export:src/file.js#usedOutside", "status": "live" },
+    { "id": "file:src/file.js", "status": "live" }
+  ]
+}

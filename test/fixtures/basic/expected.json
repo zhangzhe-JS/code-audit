@@ -1,0 +1,10 @@
+{
+  "description": "基本情况：在用、无引用、只被死代码引用",
+  "entries": ["src/main.js"],
+  "items": [
+    { "id": "file:src/dead-child.js", "status": "dead-only-ref" },
+    { "id": "file:src/dead-parent.js", "status": "dead" },
+    { "id": "file:src/unused.js", "status": "dead" },
+    { "id": "file:src/used.js", "status": "live" }
+  ]
+}
