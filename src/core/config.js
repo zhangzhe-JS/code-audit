@@ -12,6 +12,17 @@ import { STATUSES, STATUS_LABELS } from './schema.js'
 export const COMMENT_STYLES = Object.freeze(['block', 'html'])
 
 /**
+ * 清单表格可以显示的列
+ * - target     当前路径（导出显示为 路径#名字，接口显示为 方法 路径）
+ * - origin     原路径（没有移动过显示 —）
+ * - status     状态
+ * - introduced 引入
+ * - lostRef    失去引用
+ * - notes      人工备注
+ */
+export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'introduced', 'lostRef', 'notes'])
+
+/**
  * @typedef {object} Config
  * @property {string[]} sourceRoots  源码根目录，相对仓库根目录。推 pattern 时去掉这一段
  *                                   （对应项目里 @/ 这类别名指向的目录）
@@ -22,6 +33,8 @@ export const COMMENT_STYLES = Object.freeze(['block', 'html'])
  * @property {Record<string, 'block'|'html'|null>} headerStyles 各扩展名用哪种注释格式；
  *                                   没列出或为 null 的扩展名不支持生成头注释（如 .json 不能写注释）
  * @property {Record<string, string>} statusLabels 各状态的显示文案；状态 ID 本身不变
+ * @property {string[]} tableColumns 清单表格显示哪些列、按什么顺序（取值见 TABLE_COLUMNS）
+ * @property {Record<string, string>} columnTitles 清单表格各列的标题
  */
 
 /** @type {Readonly<Config>} */
@@ -47,7 +60,17 @@ export const DEFAULT_CONFIG = Object.freeze({
     '.vue': 'html', '.svelte': 'html'
   }),
   // 状态的显示文案，默认取 schema 里的中文说明；项目可以只覆盖其中几个
-  statusLabels: STATUS_LABELS
+  statusLabels: STATUS_LABELS,
+  // 清单表格：默认显示全部列；项目可以去掉不需要的列、调整顺序
+  tableColumns: TABLE_COLUMNS,
+  columnTitles: Object.freeze({
+    target: '文件',
+    origin: '原路径',
+    status: '状态',
+    introduced: '引入',
+    lostRef: '失去引用',
+    notes: '备注'
+  })
 })
 
 /**
@@ -67,9 +90,14 @@ export function resolveConfig(overrides = {}) {
   }
 
   const config = { ...DEFAULT_CONFIG, ...overrides }
-  // 这两项按键合并：项目只需要写想改的那几个，其余保留默认值
-  config.headerStyles = { ...DEFAULT_CONFIG.headerStyles, ...overrides.headerStyles }
-  config.statusLabels = { ...DEFAULT_CONFIG.statusLabels, ...overrides.statusLabels }
+  // 这几项按键合并：项目只需要写想改的那几个，其余保留默认值
+  // 写了就必须是普通对象：null、数组、字符串展开时会被悄悄忽略或拆散，配置失效却没有提示
+  for (const key of MERGED_KEYS) {
+    if (key in overrides && !isPlainObject(overrides[key])) {
+      errors.push(`${key} 必须是对象，如 { 键: 值 }；不需要修改时不要写这一项`)
+    }
+    config[key] = { ...DEFAULT_CONFIG[key], ...(isPlainObject(overrides[key]) ? overrides[key] : {}) }
+  }
 
   if (!Array.isArray(config.sourceRoots) || !config.sourceRoots.every(isRelativeDir)) {
     errors.push('sourceRoots 必须是相对目录组成的数组，如 ["src"]，不能以 / 开头或结尾')
@@ -101,6 +129,18 @@ export function resolveConfig(overrides = {}) {
     if (!STATUSES.includes(status)) errors.push(`statusLabels 里有不认识的状态：${status}`)
     if (typeof label !== 'string' || label.trim() === '') errors.push(`statusLabels["${status}"] 必须是非空字符串`)
   }
+  if (
+    !Array.isArray(config.tableColumns) ||
+    config.tableColumns.length === 0 ||
+    !config.tableColumns.every((c) => TABLE_COLUMNS.includes(c)) ||
+    new Set(config.tableColumns).size !== config.tableColumns.length
+  ) {
+    errors.push(`tableColumns 必须是不重复的非空数组，可选的列：${TABLE_COLUMNS.join('、')}`)
+  }
+  for (const [col, title] of Object.entries(config.columnTitles)) {
+    if (!TABLE_COLUMNS.includes(col)) errors.push(`columnTitles 里有不认识的列：${col}`)
+    if (typeof title !== 'string' || title.trim() === '') errors.push(`columnTitles["${col}"] 必须是非空字符串`)
+  }
 
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
@@ -110,7 +150,9 @@ export function resolveConfig(overrides = {}) {
     extensions: Object.freeze([...config.extensions]),
     headerFooter: Object.freeze([...config.headerFooter]),
     headerStyles: Object.freeze({ ...config.headerStyles }),
-    statusLabels: Object.freeze({ ...config.statusLabels })
+    statusLabels: Object.freeze({ ...config.statusLabels }),
+    tableColumns: Object.freeze([...config.tableColumns]),
+    columnTitles: Object.freeze({ ...config.columnTitles })
   })
 }
 
@@ -128,6 +170,13 @@ export async function loadProfile(file) {
 /** 提交号显示长度是否合法：太短容易重复，超过 40 位没有意义 */
 export function isValidHashLength(n) {
   return Number.isInteger(n) && n >= 4 && n <= 40
+}
+
+/** 按键合并的配置项 */
+const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles'])
+
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
 }
 
 function isRelativeDir(v) {

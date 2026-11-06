@@ -69,3 +69,23 @@ test('statusLabels 按状态合并，并校验', () => {
   assert.throws(() => resolveConfig({ statusLabels: { removed: 'x' } }), /不认识的状态：removed/)
   assert.throws(() => resolveConfig({ statusLabels: { dead: '' } }), /statusLabels\["dead"\]/)
 })
+
+test('tableColumns、columnTitles 可以配置，并校验', () => {
+  const c = resolveConfig({ tableColumns: ['target', 'status'], columnTitles: { target: 'File' } })
+  assert.deepEqual(c.tableColumns, ['target', 'status'])
+  assert.equal(c.columnTitles.target, 'File')
+  assert.equal(c.columnTitles.status, DEFAULT_CONFIG.columnTitles.status)
+  assert.throws(() => resolveConfig({ tableColumns: [] }), /tableColumns/)
+  assert.throws(() => resolveConfig({ tableColumns: ['target', 'size'] }), /tableColumns/)
+  assert.throws(() => resolveConfig({ tableColumns: ['target', 'target'] }), /tableColumns/)
+  assert.throws(() => resolveConfig({ columnTitles: { size: '大小' } }), /不认识的列：size/)
+  assert.throws(() => resolveConfig({ columnTitles: { target: ' ' } }), /columnTitles\["target"\]/)
+})
+
+test('按键合并的配置项写成 null、数组、字符串时报错，不悄悄用默认值', () => {
+  for (const key of ['headerStyles', 'statusLabels', 'columnTitles']) {
+    for (const bad of [null, [], 'x']) {
+      assert.throws(() => resolveConfig({ [key]: bad }), new RegExp(`${key} 必须是对象`), `${key} = ${JSON.stringify(bad)} 应该报错`)
+    }
+  }
+})

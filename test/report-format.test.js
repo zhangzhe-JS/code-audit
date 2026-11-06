@@ -94,3 +94,8 @@ test('escapeHtmlComment：--> 换成 -- >，所有出现的地方都换', async 
   assert.equal(escapeHtmlComment('a --> b --> c'), 'a -- > b -- > c')
   assert.equal(escapeHtmlComment('普通说明'), '普通说明')
 })
+
+test('escapeTableCell：先转义反斜杠，再转义 |', () => {
+  assert.equal(escapeTableCell('a \\| b'), 'a \\\\\\| b') // a \| b → a \\\| b
+  assert.equal(escapeTableCell('C:\\dir'), 'C:\\\\dir')
+})

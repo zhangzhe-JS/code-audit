@@ -41,11 +41,17 @@ export function escapeComment(text) {
 
 /**
  * 放进 Markdown 表格单元格之前转义
- * - | 会被当成列分隔符，导致表格错位，换成 \|
+ * - 先把 \ 换成 \\：否则原文里的 \| 转义后变成 \\|，
+ *   Markdown 会把 \\ 当成一个转义好的反斜杠，后面的 | 就成了列分隔符
+ * - 再把 | 换成 \|：| 会被当成列分隔符，导致表格错位
  * - 换行会把一行表格拆断，换成空格
+ * 顺序不能反：先换 | 再换 \，刚加上的 \ 也会被重复转义
  */
 export function escapeTableCell(text) {
-  return text.replaceAll('|', '\\|').replace(/\r?\n/g, ' ')
+  return text
+    .replaceAll('\\', '\\\\')
+    .replaceAll('|', '\\|')
+    .replace(/\r?\n/g, ' ')
 }
 
 /**
