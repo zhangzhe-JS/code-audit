@@ -26,9 +26,10 @@ test('--help 列出全部命令', () => {
 })
 
 test('子命令能收到剩下的参数', () => {
-  const r = cli('history', '--file', 'a.js')
+  // 用还是空壳的 scan 来测分发：空壳会原样打印收到的参数
+  const r = cli('scan', '--file', 'a.js')
   assert.equal(r.status, 0)
-  assert.match(r.stdout, /history: 未实现/)
+  assert.match(r.stdout, /scan: 未实现/)
   assert.match(r.stdout, /a\.js/)
 })
 

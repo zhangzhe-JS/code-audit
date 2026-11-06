@@ -15,6 +15,16 @@ function escapeRegex(s) {
 }
 
 /**
+ * 只在这些源码文件里找引用方
+ * README、构建产物（stats.html）、翻译 json、sourcemap 等文件里也会出现路径字符串，但不是引用
+ */
+export const SOURCE_GLOBS = [
+  '*.js', '*.mjs', '*.cjs', '*.jsx',
+  '*.ts', '*.mts', '*.cts', '*.tsx',
+  '*.vue', '*.svelte'
+]
+
+/**
  * 文件在历史上用过的所有路径（改名、移动前的旧路径），包括当前路径
  * 用来排除目标文件自己：旧提交里它还在旧路径上，不能被当成引用方
  * @returns {Set<string>}
@@ -38,7 +48,8 @@ export function refsAt(root, commit, pattern, exclude) {
   let out
   try {
     // -l 只列出文件名，-F 按字面匹配；先用它快速找出可能引用的文件
-    out = git(root, ['grep', '-l', '-F', pattern, commit, '--'])
+    // 最后的 SOURCE_GLOBS 限定只搜源码文件
+    out = git(root, ['grep', '-l', '-F', pattern, commit, '--', ...SOURCE_GLOBS])
   } catch (e) {
     // git grep 没有匹配时退出码为 1，这是正常情况；其他退出码是真正的错误，必须抛出
     // 否则仓库不存在、提交号写错时会悄悄返回空集合，最终得出错误的 remove / dead 结论
@@ -63,6 +74,13 @@ export function refsAt(root, commit, pattern, exclude) {
  * 引用时间线：每次有文件开始或停止引用 pattern，记一条
  * @returns {{commit: import('../core/schema.js').Commit, change: 'add'|'remove', from: string}[]}
  */
+/**
+ * @param {string} root
+ * @param {string} pattern 引用方代码里会出现的字符串
+ * @param {object} [opts]
+ * @param {string} [opts.rev] 查到哪个提交为止，默认 HEAD
+ * @param {string | string[]} [opts.exclude] 目标文件：传当前路径，或传它用过的全部路径
+ */
 export function buildTimeline(root, pattern, { rev = 'HEAD', exclude } = {}) {
   // 先找出所有改动过包含 pattern 的行的主线提交，按从旧到新排列
   const out = git(root, [
@@ -77,7 +95,12 @@ export function buildTimeline(root, pattern, { rev = 'HEAD', exclude } = {}) {
   ])
 
   // 目标文件改名前的旧路径也要排除，否则旧提交里它自己会被当成引用方
-  const skip = exclude ? historicalPaths(root, exclude, rev) : new Set()
+  // 传数组：调用方已经查好了全部路径（如 traceOrigin 的结果）；传字符串：这里用 --follow 查
+  const skip = Array.isArray(exclude)
+    ? new Set(exclude)
+    : exclude
+      ? historicalPaths(root, exclude, rev)
+      : new Set()
 
   const timeline = []
   let prev = new Set()
