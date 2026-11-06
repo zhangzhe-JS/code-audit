@@ -85,3 +85,17 @@ export function groupTimeline(timeline) {
 export function escapeHtmlComment(text) {
   return text.replaceAll('-->', '-- >')
 }
+
+/** 把换行换成空格：Markdown 列表项、标题里的内容只占一行，换行会把结构拆乱 */
+export function oneLine(text) {
+  return text.replace(/\r?\n/g, ' ')
+}
+
+/**
+ * 把文字包成 Markdown 行内代码
+ * 文字里本身有反引号时，用两个反引号包起来并在两侧加空格，否则代码会提前结束
+ */
+export function inlineCode(text) {
+  const t = oneLine(text)
+  return t.includes('`') ? `\`\` ${t} \`\`` : `\`${t}\``
+}

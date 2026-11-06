@@ -99,3 +99,15 @@ test('escapeTableCell：先转义反斜杠，再转义 |', () => {
   assert.equal(escapeTableCell('a \\| b'), 'a \\\\\\| b') // a \| b → a \\\| b
   assert.equal(escapeTableCell('C:\\dir'), 'C:\\\\dir')
 })
+
+test('oneLine：换行换成空格', async () => {
+  const { oneLine } = await import('../src/report/format.js')
+  assert.equal(oneLine('a\nb\r\nc'), 'a b c')
+})
+
+test('inlineCode：普通文字用一个反引号；文字里有反引号时用两个并加空格', async () => {
+  const { inlineCode } = await import('../src/report/format.js')
+  assert.equal(inlineCode('src/a.js'), '`src/a.js`')
+  assert.equal(inlineCode('a`b'), '`` a`b ``')
+  assert.equal(inlineCode('a\nb'), '`a b`')
+})
