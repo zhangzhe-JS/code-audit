@@ -76,6 +76,17 @@ export const TAGS = [
   'business-check'
 ]
 
+/**
+ * 引用方式（refs[].via），不同方式对应不同状态
+ * - static   import x from '...'         → live
+ * - reexport export * from '...'         → live
+ * - glob     import.meta.glob(...)       → live
+ * - dynamic  拼接路径的 import()           → unknown
+ * - comment  被注释掉的 import            → dormant
+ * - config   构建配置里的别名等             → external
+ */
+export const VIAS = ['static', 'reexport', 'glob', 'dynamic', 'comment', 'config']
+
 
 /**报告数据的接口说明书 */
 
@@ -120,7 +131,7 @@ export const TAGS = [
  * @typedef {object} Ref 一处引用
  * @property {string} from  引用方文件，相对 root
  * @property {number} line
- * @property {'static'|'reexport'|'glob'|'dynamic'|'comment'|'config'} via
+ * @property {'static'|'reexport'|'glob'|'dynamic'|'comment'|'config'} via  VIAS 之一
  */
 
 /**
@@ -150,50 +161,168 @@ export const TAGS = [
 
 
 /**
+ * 校验一份数据是否符合上面的类型定义
+ * 任何输入都只返回错误列表，不会抛异常
  * @param {Report} data
- * 校验一份数据是否符合格式
  * @returns {string[]} 错误列表；空数组表示通过
  */
 export function validate(data) {
   const errors = []
+  const err = (msg) => errors.push(msg)
+
   if (!isObject(data)) return ['根节点必须是对象']
-  if (data.version !== SCHEMA_VERSION) {
-    errors.push(`version 必须是 ${SCHEMA_VERSION}，实际是 ${data.version}`)
+
+  if (data.version !== SCHEMA_VERSION) err(`version 必须是 ${SCHEMA_VERSION}，实际是 ${data.version}`)
+  if (!isNonEmptyString(data.generatedAt)) err('generatedAt 必须是非空字符串')
+
+  if (!isObject(data.tool)) {
+    err('缺少 tool')
+  } else {
+    if (!isNonEmptyString(data.tool.name)) err('tool.name 必须是非空字符串')
+    if (!isNonEmptyString(data.tool.version)) err('tool.version 必须是非空字符串')
   }
+
   if (!isObject(data.project)) {
-    errors.push('缺少 project')
-  } else if (typeof data.project.root !== 'string') {
-    errors.push('project.root 必须是字符串')
+    err('缺少 project')
+  } else {
+    const p = data.project
+    if (!isNonEmptyString(p.name)) err('project.name 必须是非空字符串')
+    if (!isNonEmptyString(p.root) || !isAbsolute(p.root)) err('project.root 必须是绝对路径')
+    if (!isHash(p.rev)) err(`project.rev 必须是完整提交号：${p.rev}`)
+    if (!Array.isArray(p.entries)) {
+      err('project.entries 必须是数组')
+    } else {
+      p.entries.forEach((e, i) => {
+        if (!isRelativePath(e)) err(`project.entries[${i}] 必须是相对路径：${e}`)
+      })
+    }
   }
+
   if (!Array.isArray(data.items)) {
-    errors.push('items 必须是数组')
+    err('items 必须是数组')
     return errors
   }
+
   const seen = new Set()
+  let prevId = null
   data.items.forEach((item, i) => {
     const at = `items[${i}]`
     if (!isObject(item)) {
-      errors.push(`${at} 必须是对象`)
+      err(`${at} 必须是对象`)
       return
     }
-    if (!KINDS.includes(item.kind)) errors.push(`${at}.kind 不合法：${item.kind}`)
-    if (!STATUSES.includes(item.status)) errors.push(`${at}.status 不合法：${item.status}`)
-    if (typeof item.target !== 'string' || item.target === '') errors.push(`${at}.target 不能为空`)
 
-    if (!Array.isArray(item.evidence) || item.evidence.length === 0) {
-      errors.push(`${at}.evidence 至少要有一条证据`)
-    } else {
-      item.evidence.forEach((ev, j) => {
-        if (ev.tag !== undefined && !TAGS.includes(ev.tag)) {
-          errors.push(`${at}.evidence[${j}].tag 不合法：${ev.tag}`)
-        }
-      })
+    validateItem(item, at, err)
+
+    if (typeof item.id === 'string') {
+      if (seen.has(item.id)) err(`${at}.id 重复：${item.id}`)
+      if (prevId !== null && item.id < prevId) err(`${at} 没有按 id 排序：${item.id} 排在 ${prevId} 后面`)
+      seen.add(item.id)
+      prevId = item.id
     }
-    if (!Array.isArray(item.refs)) errors.push(`${at}.refs 必须是数组`)
-    if (seen.has(item.id)) errors.push(`${at}.id 重复：${item.id}`)
-    seen.add(item.id)
   })
+
   return errors
+}
+
+/** 校验单个排查对象 */
+function validateItem(item, at, err) {
+  if (!isNonEmptyString(item.id)) err(`${at}.id 必须是非空字符串`)
+  if (!KINDS.includes(item.kind)) err(`${at}.kind 不合法：${item.kind}`)
+  if (!STATUSES.includes(item.status)) err(`${at}.status 不合法：${item.status}`)
+  if (!isNonEmptyString(item.target)) err(`${at}.target 不能为空`)
+
+  // kind、target、name、id 四者必须一致
+  if (item.kind === 'export') {
+    if (!isNonEmptyString(item.name)) err(`${at}.name：kind 为 export 时必须有导出名`)
+  } else if (item.name !== undefined) {
+    err(`${at}.name：只有 kind 为 export 时才能有 name`)
+  }
+  if (isNonEmptyString(item.target)) {
+    if (item.kind === 'api') {
+      if (!/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) \S+$/.test(item.target)) {
+        err(`${at}.target：api 的格式应为「方法 路径」，如 GET /api/user：${item.target}`)
+      }
+    } else if (KINDS.includes(item.kind) && !isRelativePath(item.target)) {
+      err(`${at}.target 必须是相对路径：${item.target}`)
+    }
+  }
+  const expectedId = buildId(item)
+  if (expectedId && isNonEmptyString(item.id) && item.id !== expectedId) {
+    err(`${at}.id 与 kind / target / name 不一致：应为 ${expectedId}，实际是 ${item.id}`)
+  }
+
+  if (!Array.isArray(item.evidence) || item.evidence.length === 0) {
+    err(`${at}.evidence 至少要有一条证据`)
+  } else {
+    item.evidence.forEach((ev, j) => validateEvidence(ev, `${at}.evidence[${j}]`, err))
+  }
+
+  if (!Array.isArray(item.refs)) {
+    err(`${at}.refs 必须是数组`)
+  } else {
+    item.refs.forEach((ref, j) => validateRef(ref, `${at}.refs[${j}]`, err))
+  }
+
+  if (item.history !== null) validateHistory(item.history, `${at}.history`, err)
+  if (item.verify !== null) validateVerify(item.verify, `${at}.verify`, err)
+}
+
+/** 按 kind 拼出 id；kind 不合法或缺字段时返回 null */
+function buildId(item) {
+  if (!isNonEmptyString(item.target)) return null
+  if (item.kind === 'file') return `file:${item.target}`
+  if (item.kind === 'api') return `api:${item.target}`
+  if (item.kind === 'export' && isNonEmptyString(item.name)) return `export:${item.target}#${item.name}`
+  return null
+}
+
+function validateEvidence(ev, at, err) {
+  if (!isObject(ev)) return err(`${at} 必须是对象`)
+  if (!isNonEmptyString(ev.rule)) err(`${at}.rule 必须是非空字符串`)
+  if (!isNonEmptyString(ev.detail)) err(`${at}.detail 必须是非空字符串`)
+  if (ev.tag !== undefined && !TAGS.includes(ev.tag)) err(`${at}.tag 不合法：${ev.tag}`)
+}
+
+function validateRef(ref, at, err) {
+  if (!isObject(ref)) return err(`${at} 必须是对象`)
+  if (!isRelativePath(ref.from)) err(`${at}.from 必须是相对路径：${ref.from}`)
+  if (!Number.isInteger(ref.line) || ref.line < 1) err(`${at}.line 必须是正整数：${ref.line}`)
+  if (!VIAS.includes(ref.via)) err(`${at}.via 不合法：${ref.via}`)
+}
+
+function validateCommit(c, at, err) {
+  if (!isObject(c)) return err(`${at} 必须是提交对象`)
+  if (!isHash(c.hash)) err(`${at}.hash 必须是完整提交号：${c.hash}`)
+  if (typeof c.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(c.date)) err(`${at}.date 格式应为 YYYY-MM-DD：${c.date}`)
+  if (!isNonEmptyString(c.author)) err(`${at}.author 必须是非空字符串`)
+  if (typeof c.subject !== 'string') err(`${at}.subject 必须是字符串`)
+}
+
+function validateHistory(h, at, err) {
+  if (!isObject(h)) return err(`${at} 必须是对象或 null`)
+  validateCommit(h.introduced, `${at}.introduced`, err)
+  if (h.lostRef !== null) validateCommit(h.lostRef, `${at}.lostRef`, err)
+  if (!Array.isArray(h.timeline)) return err(`${at}.timeline 必须是数组`)
+  h.timeline.forEach((e, k) => {
+    const eat = `${at}.timeline[${k}]`
+    if (!isObject(e)) return err(`${eat} 必须是对象`)
+    validateCommit(e.commit, `${eat}.commit`, err)
+    if (e.change !== 'add' && e.change !== 'remove') err(`${eat}.change 必须是 add 或 remove：${e.change}`)
+    if (!isRelativePath(e.from)) err(`${eat}.from 必须是相对路径：${e.from}`)
+  })
+}
+
+function validateVerify(v, at, err) {
+  if (!isObject(v)) return err(`${at} 必须是对象或 null`)
+  if (!isHash(v.rev)) err(`${at}.rev 必须是完整提交号：${v.rev}`)
+  if (!isObject(v.build) || typeof v.build.ok !== 'boolean' || !isStringArray(v.build.newWarnings)) {
+    err(`${at}.build 应为 { ok: boolean, newWarnings: string[] }`)
+  }
+  if (!isObject(v.test) || !isStringArray(v.test.newFailures)) {
+    err(`${at}.test 应为 { newFailures: string[] }`)
+  }
+  if (typeof v.passed !== 'boolean') err(`${at}.passed 必须是布尔值`)
 }
 
 
@@ -212,4 +341,27 @@ export function pickStatus(candidates) {
 
 function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
+}
+
+function isNonEmptyString(v) {
+  return typeof v === 'string' && v !== ''
+}
+
+function isStringArray(v) {
+  return Array.isArray(v) && v.every((s) => typeof s === 'string')
+}
+
+/** 完整提交号：SHA-1 为 40 位，SHA-256 仓库为 64 位 */
+function isHash(v) {
+  return typeof v === 'string' && /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(v)
+}
+
+/** 绝对路径：/ 开头，或 Windows 的盘符开头 */
+function isAbsolute(v) {
+  return v.startsWith('/') || /^[A-Za-z]:[\\/]/.test(v)
+}
+
+/** 相对路径：非空、不是绝对路径、统一用 / 分隔 */
+function isRelativePath(v) {
+  return isNonEmptyString(v) && !isAbsolute(v) && !v.includes('\\')
 }

@@ -7,8 +7,9 @@ import { git, COMMIT_FORMAT, parseCommit } from './git.js'
  * @param {string} root 仓库目录
  * @param {string} file 文件路径，相对 root
  * @param {string} [rev] 从哪个提交往前查，默认当前 HEAD
- * @returns {import('../core/schema.js').Commit | null} 找不到时返回 null
- * 
+ * @returns {import('../core/schema.js').Commit | null}
+ *   文件在 rev 之前的历史里从未出现过时返回 null；
+ *   仓库不存在、rev 无效等错误会抛出，不会返回 null（避免把错误当成「查不到」）
  */
 export function findIntroduced(root, file, rev = 'HEAD') {
   const out = git(root, [

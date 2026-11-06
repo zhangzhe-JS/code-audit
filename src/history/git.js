@@ -11,11 +11,20 @@ import { execFileSync } from 'node:child_process'
  * 备注不使用execSync，execSync 会把整条命令交给 shell 去解析，文件名里有空格或特殊字符就会出问题
  */
 export function git(root, args) {
-  return execFileSync('git', args, {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024 // 大仓库的 log 输出可能很长，默认 1MB 不够
-  }).trim()
+  try {
+    return execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024, // 大仓库的 log 输出可能很长，默认 1MB 不够
+      stdio: ['ignore', 'pipe', 'pipe'] // 收集 stderr 放进错误信息，不直接打印到终端
+    }).trim()
+  } catch (e) {
+    // 统一成带 git 报错原文的错误，并保留退出码，调用方据此区分「没有匹配」和真正的错误
+    const detail = String(e.stderr || e.message).trim()
+    const err = new Error(`git ${args.join(' ')} 失败（退出码 ${e.status ?? '无'}）：${detail}`)
+    err.status = e.status
+    throw err
+  }
 }
 
 // 提交信息的输出格式：字段之间用 \x1f（不可见的分隔符）隔开

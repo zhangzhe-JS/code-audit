@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRepo } from './helpers/repo.js'
 import { findIntroduced } from '../src/history/introduced.js'
-import { buildTimeline, findLostRef } from '../src/history/refs.js'
+import { buildTimeline, findLostRef, refsAt } from '../src/history/refs.js'
 
 test('找到文件最初被加入的提交', (t) => {
   const repo = createRepo()
@@ -137,4 +137,59 @@ test('块注释包住的引用不算，行首块注释后面的代码仍算', (t
 
   const timeline = buildTimeline(repo.root, 'utils/x', { exclude: 'src/utils/x.js' })
   assert.deepEqual(timeline.map((e) => e.from), ['src/b.js'])
+})
+
+// ---------- 错误处理 ----------
+
+test('提交号无效时 refsAt 抛错，不当成没有引用', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/a.js', '1\n')
+  repo.commit('init')
+
+  assert.throws(() => refsAt(repo.root, 'f'.repeat(40), 'x'), /git grep/)
+})
+
+test('仓库不存在时 buildTimeline 抛错', () => {
+  assert.throws(() => buildTimeline('/no/such/repo', 'x'))
+})
+
+test('仓库或提交号无效时 findIntroduced 抛错，文件不存在才返回 null', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/a.js', '1\n')
+  repo.commit('init')
+
+  assert.equal(findIntroduced(repo.root, 'src/none.js'), null)
+  assert.throws(() => findIntroduced(repo.root, 'src/a.js', 'no-such-rev'))
+  assert.throws(() => findIntroduced('/no/such/repo', 'src/a.js'))
+})
+
+test('目标文件改名前的旧路径不会被当成引用方', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  // 目标文件自己的内容里就包含 pattern
+  repo.write('src/a.js', "export const self = 'utils/a'\n")
+  repo.commit('新增 a', { date: '2024-01-01' })
+  repo.write('src/b.js', "import './utils/a.js'\n")
+  repo.commit('b 引用 a', { date: '2024-02-01' })
+  repo.write('src/utils/.keep', '')
+  repo.run(['mv', 'src/a.js', 'src/utils/a.js'])
+  repo.commit('a 移到 utils', { date: '2024-03-01' })
+
+  const timeline = buildTimeline(repo.root, 'utils/a', { exclude: 'src/utils/a.js' })
+  assert.deepEqual(timeline.map((e) => `${e.change} ${e.from}`), ['add src/b.js'])
+})
+
+test('不完整的时间线：findLostRef 抛错，不猜结论', () => {
+  const c = { hash: 'a'.repeat(40), date: '2024-01-01', author: 'a', subject: 's' }
+  assert.throws(() => findLostRef([{ commit: c, change: 'remove', from: 'src/a.js' }]), /从未引入/)
+  assert.throws(
+    () => findLostRef([
+      { commit: c, change: 'add', from: 'src/a.js' },
+      { commit: c, change: 'add', from: 'src/a.js' }
+    ]),
+    /重复引入/
+  )
 })
