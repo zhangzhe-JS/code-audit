@@ -118,11 +118,12 @@ export const VIAS = ['static', 'reexport', 'glob', 'dynamic', 'comment', 'config
  * @property {Ref[]} refs     所有引用，可以为空      （scan 填）
  * @property {History|null} history  null = 还没跑 history
  * @property {Verify|null} verify    null = 还没跑 verify
+ * @property {string[]} [notes]      人工补充的说明，如风险提示；工具不生成，report 原样显示
  */
 
 /**
  * @typedef {object} Evidence 一条证据
- * @property {string} rule    哪条规则得出的，如 no-import
+ * @property {string} rule    哪条规则得出的，如 no-import；人工列入的候选写 manual-candidate
  * @property {string} detail  人能看懂的说明
  * @property {string} [tag]   TAGS 之一
  */
@@ -266,6 +267,16 @@ function validateItem(item, at, err) {
 
   if (item.history !== null) validateHistory(item.history, `${at}.history`, err)
   if (item.verify !== null) validateVerify(item.verify, `${at}.verify`, err)
+  // notes 可以不写；写了就必须是非空字符串组成的数组
+  if (item.notes !== undefined) {
+    if (!Array.isArray(item.notes)) {
+      err(`${at}.notes 必须是数组`)
+    } else {
+      item.notes.forEach((n, j) => {
+        if (!isNonEmptyString(n)) err(`${at}.notes[${j}] 必须是非空字符串`)
+      })
+    }
+  }
 }
 
 /** 按 kind 拼出 id；kind 不合法或缺字段时返回 null */

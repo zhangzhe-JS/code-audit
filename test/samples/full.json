@@ -75,7 +75,8 @@
         "build": { "ok": true, "newWarnings": [] },
         "test": { "newFailures": [] },
         "passed": true
-      }
+      },
+      "notes": ["依赖的计算库已从 package.json 移除，恢复引用会导致构建失败"]
     }
   ]
 }

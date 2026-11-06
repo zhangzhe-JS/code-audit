@@ -199,3 +199,30 @@ test('verify 内部结构不对不通过', () => {
   assert.match(msg, /verify.test/)
   assert.match(msg, /verify.passed/)
 })
+// ---------- notes ----------
+
+test('notes 可以不写', () => {
+  const d = sample()
+  assert.equal('notes' in d.items[0], false)
+  assert.deepEqual(validate(d), [])
+})
+
+test('notes 写了就必须是非空字符串数组', () => {
+  const d = sample()
+  d.items[0].notes = ['恢复引用会导致构建失败']
+  assert.deepEqual(validate(d), [])
+
+  d.items[0].notes = '不是数组'
+  assert.match(validate(d).join(), /notes 必须是数组/)
+
+  d.items[0].notes = ['正常', '', 123]
+  const msg = validate(d).join()
+  assert.match(msg, /notes\[1\] 必须是非空字符串/)
+  assert.match(msg, /notes\[2\] 必须是非空字符串/)
+})
+
+test('notes 为 null 也不通过（null 不等于没写）', () => {
+  const d = sample()
+  d.items[0].notes = null
+  assert.match(validate(d).join(), /notes 必须是数组/)
+})
