@@ -5,6 +5,7 @@
  */
 import { git, COMMIT_FORMAT, parseCommit } from './git.js'
 import { stripComments } from '../collect/strip-comments.js'
+import { DEFAULT_CONFIG } from '../core/config.js'
 
 /**
  * 转义扩展正则（git -G 使用的规则）的特殊字符，让 pattern 按字面匹配
@@ -15,14 +16,13 @@ function escapeRegex(s) {
 }
 
 /**
- * 只在这些源码文件里找引用方
- * README、构建产物（stats.html）、翻译 json、sourcemap 等文件里也会出现路径字符串，但不是引用
+ * 把扩展名列表转成 git 的路径匹配写法，限定只在源码文件里找引用方
+ * README、构建产物、翻译 json、sourcemap 等文件里也会出现路径字符串，但不是引用
+ * 例：['.js', '.vue'] → ['*.js', '*.vue']
  */
-export const SOURCE_GLOBS = [
-  '*.js', '*.mjs', '*.cjs', '*.jsx',
-  '*.ts', '*.mts', '*.cts', '*.tsx',
-  '*.vue', '*.svelte'
-]
+export function toGlobs(extensions) {
+  return extensions.map((ext) => `*${ext}`)
+}
 
 /**
  * 文件在历史上用过的所有路径（改名、移动前的旧路径），包括当前路径
@@ -39,17 +39,18 @@ export function historicalPaths(root, file, rev = 'HEAD') {
 /**
  * 某个提交时，哪些文件在注释以外的地方包含 pattern
  * @param {string | Set<string>} [exclude] 要排除的文件（目标文件自己），可以传多个路径
+ * @param {readonly string[]} [extensions] 只在这些扩展名的文件里找，默认取 DEFAULT_CONFIG
  * @returns {Set<string>} 引用方文件路径
  * 仓库、提交号无效等错误会抛出，不会当成「没有引用」
  */
-export function refsAt(root, commit, pattern, exclude) {
+export function refsAt(root, commit, pattern, exclude, extensions = DEFAULT_CONFIG.extensions) {
   const skip = exclude instanceof Set ? exclude : new Set(exclude ? [exclude] : [])
 
   let out
   try {
     // -l 只列出文件名，-F 按字面匹配；先用它快速找出可能引用的文件
-    // 最后的 SOURCE_GLOBS 限定只搜源码文件
-    out = git(root, ['grep', '-l', '-F', pattern, commit, '--', ...SOURCE_GLOBS])
+    // 最后的路径匹配限定只搜源码文件
+    out = git(root, ['grep', '-l', '-F', pattern, commit, '--', ...toGlobs(extensions)])
   } catch (e) {
     // git grep 没有匹配时退出码为 1，这是正常情况；其他退出码是真正的错误，必须抛出
     // 否则仓库不存在、提交号写错时会悄悄返回空集合，最终得出错误的 remove / dead 结论
@@ -80,8 +81,9 @@ export function refsAt(root, commit, pattern, exclude) {
  * @param {object} [opts]
  * @param {string} [opts.rev] 查到哪个提交为止，默认 HEAD
  * @param {string | string[]} [opts.exclude] 目标文件：传当前路径，或传它用过的全部路径
+ * @param {readonly string[]} [opts.extensions] 只在这些扩展名的文件里找引用方，默认取 DEFAULT_CONFIG
  */
-export function buildTimeline(root, pattern, { rev = 'HEAD', exclude } = {}) {
+export function buildTimeline(root, pattern, { rev = 'HEAD', exclude, extensions = DEFAULT_CONFIG.extensions } = {}) {
   // 先找出所有改动过包含 pattern 的行的主线提交，按从旧到新排列
   const out = git(root, [
     'log',
@@ -107,7 +109,7 @@ export function buildTimeline(root, pattern, { rev = 'HEAD', exclude } = {}) {
   // 加了 -m 后输出里可能夹带空行，过滤掉
   for (const line of out.split('\n').filter(Boolean)) {
     const commit = parseCommit(line)
-    const now = refsAt(root, commit.hash, pattern, skip)
+    const now = refsAt(root, commit.hash, pattern, skip, extensions)
 
     for (const f of now) if (!prev.has(f)) timeline.push({ commit, change: 'add', from: f })
     for (const f of prev) if (!now.has(f)) timeline.push({ commit, change: 'remove', from: f })

@@ -8,17 +8,23 @@
  * - 复制（git 标记 C）：复制出来的是新文件，引入就是这次复制
  *   （git --follow 会顺着复制继续追，追到被复制文件的历史，需要在这里截住）
  * - git 没认出来的移动：移动时内容改动太大（如小文件加了头注释），git 只看到「新增」
- *   如果同一次提交里删掉了一个同名文件，就当作移动，接着追那个旧路径
+ *   同一次提交里删掉了一个同名文件，并且旧文件的内容大部分保留在新文件里，才当作移动
+ *   证据不足（同名文件不止一个、内容对不上）时不追，保留当前的新增提交
  * - 删除后又重新加入（同一路径有过几段生命）：取最早的那次，因为时间线覆盖的也是整个历史
  */
 import { basename } from 'node:path'
 import { git, COMMIT_FORMAT, parseCommit } from './git.js'
+import { stripComments } from '../collect/strip-comments.js'
 
 // 输出里用 \x1e 标记提交行的开头，和文件状态行区分开
 const COMMIT_MARK = '\x1e'
 
 // 没认出来的移动最多连续追几次，防止异常数据导致死循环
 const MAX_MOVES = 5
+
+// 旧文件里至少有这么多比例的行出现在新文件里，才算同一个文件
+// 用「旧文件的行有多少保留下来」而不是 git 的相似度：加头注释只会增加行，不会删掉原来的行
+const MOVE_KEEP_RATIO = 0.6
 
 /**
  * @param {string} root 仓库目录
@@ -93,9 +99,13 @@ export function traceOrigin(root, file, rev = 'HEAD', moves = 0) {
 }
 
 /**
- * 同一次提交里删掉了一个同名文件，就当作是移动，返回旧路径
- * 同名比较时去掉首尾空格（finicr-web 里有文件名原本带前导空格的情况）
- * 删掉的同名文件不止一个时无法确定，返回 null
+ * 判断新增的文件是不是从别处移动过来的（git 没认出来的那种），是就返回旧路径
+ *
+ * 两个条件都满足才算：
+ * 1. 同一次提交里删掉了一个同名文件（比较时去掉首尾空格：有的项目文件名带前导空格，移动时顺手去掉了）
+ *    同名文件不止一个时无法确定是哪个，不算
+ * 2. 旧文件的内容大部分保留在新文件里（见 MOVE_KEEP_RATIO）
+ *    防止把不相干的同名文件（多个 index.js、config.js）误认成移动
  */
 function findMovedFrom(root, commit, file) {
   const name = basename(file).trim()
@@ -108,5 +118,30 @@ function findMovedFrom(root, commit, file) {
     commit
   ])
   const same = out.split('\n').filter((p) => p && basename(p).trim() === name)
-  return same.length === 1 ? same[0] : null
+  if (same.length !== 1) return null
+
+  const from = same[0]
+  return keepRatio(root, commit, from, file) >= MOVE_KEEP_RATIO ? from : null
+}
+
+/**
+ * 旧文件（提交前）里的行，有多少比例原样出现在新文件（提交后）里
+ * 比较前去掉每行首尾空白、跳过空行，缩进变化不影响结果
+ *
+ * 旧文件是空的：没有行可比，改为看新文件去掉注释后是不是也是空的
+ * （空文件移动时只加了头注释，内容仍然一致；新文件里有代码，就是另一个文件）
+ */
+function keepRatio(root, commit, from, to) {
+  const before = meaningfulLines(git(root, ['show', `${commit}^:${from}`]))
+  const afterText = git(root, ['show', `${commit}:${to}`])
+  if (before.length === 0) {
+    return meaningfulLines(stripComments(afterText)).length === 0 ? 1 : 0
+  }
+  const after = new Set(meaningfulLines(afterText))
+  const kept = before.filter((line) => after.has(line)).length
+  return kept / before.length
+}
+
+function meaningfulLines(text) {
+  return text.split('\n').map((l) => l.trim()).filter(Boolean)
 }

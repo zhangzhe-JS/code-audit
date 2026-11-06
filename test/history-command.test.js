@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { createRepo } from './helpers/repo.js'
 import { traceHistory, defaultPattern } from '../src/history/index.js'
 import { validate } from '../src/core/schema.js'
+import { DEFAULT_CONFIG, resolveConfig } from '../src/core/config.js'
 
 const bin = fileURLToPath(new URL('../bin/code-audit.js', import.meta.url))
 const cli = (...args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8' })
@@ -69,10 +70,10 @@ test('traceHistory：文件不存在时报错', (t) => {
   assert.throws(() => traceHistory({ root: repo.root, file: 'src/none.js', pattern: 'none' }), /找不到文件/)
 })
 
-test('defaultPattern：去掉 src/ 和扩展名', () => {
+test('defaultPattern：去掉源码根目录（默认 src）和扩展名', () => {
   assert.equal(defaultPattern('src/utils/math.js'), 'utils/math')
   assert.equal(defaultPattern('src/views/Home.vue'), 'views/Home')
-  assert.equal(defaultPattern('lib/a.b.js'), 'lib/a.b')
+  assert.equal(defaultPattern('src/lib/a.b.js'), 'lib/a.b') // 只去掉最后一个扩展名
   assert.equal(defaultPattern('src/utils/ setting.js'), 'utils/ setting') // 空格保留，当年就是这么引用的
   assert.equal(defaultPattern('src/utils/relayout/index.js'), 'utils/relayout') // 引用目录时不写 index
 })
@@ -108,7 +109,7 @@ test('history 命令仓库不存在时报错，退出码为 1', () => {
   assert.ok(r.stderr.length > 0)
 })
 
-// ---------- finicr-web 实测发现的问题 ----------
+// ---------- 真实项目实测发现的问题 ----------
 
 test('不传 pattern 时，用文件最初的路径推出（移动过的文件也能查到引用）', (t) => {
   const { repo, lost } = quarantinedRepo()
@@ -231,4 +232,125 @@ test('在分支上加入的文件：引入是合并进主线的那个提交（�
   const { introduced } = traceHistory({ root: repo.root, file: 'src/utils/x.js' }).history
   assert.equal(introduced.hash, merge)
   assert.equal(introduced.date, '2024-03-01')
+})
+
+// ---------- 通用性：项目配置 ----------
+
+test('defaultPattern：文件不在源码根目录下时返回 null，不猜', () => {
+  assert.equal(defaultPattern('app/utils/x.js'), null)
+  assert.equal(defaultPattern('packages/foo/src/a.js'), null)
+  assert.equal(defaultPattern('srcx/a.js'), null) // 只是名字以 src 开头的目录不算
+})
+
+test('defaultPattern：按配置的源码根目录推，多个匹配时取最长的', () => {
+  assert.equal(defaultPattern('app/utils/x.js', { sourceRoots: ['app'] }), 'utils/x')
+  const roots = { sourceRoots: ['packages/web', 'packages/web/src'] }
+  assert.equal(defaultPattern('packages/web/src/utils/x.js', roots), 'utils/x')
+})
+
+test('traceHistory：推不出 pattern 时报错，提示手动指定', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('app/utils/x.js', 'export const x = 1\n')
+  repo.commit('新增 x')
+
+  assert.throws(() => traceHistory({ root: repo.root, file: 'app/utils/x.js' }), /无法推出 pattern.*--pattern/)
+  // 手动指定 pattern 就能查
+  assert.doesNotThrow(() => traceHistory({ root: repo.root, file: 'app/utils/x.js', pattern: 'utils/x' }))
+})
+
+test('traceHistory：源码不在 src/ 的项目，配置 sourceRoots 后能自动推出 pattern', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('app/utils/x.js', 'export const x = 1\n')
+  repo.commit('新增 x', { date: '2024-01-01' })
+  repo.write('app/pages/index.vue', "<script>\nimport { x } from '~/utils/x'\n</script>\n")
+  repo.commit('页面引用 x', { date: '2024-02-01' })
+
+  const config = resolveConfig({ sourceRoots: ['app'] })
+  const r = traceHistory({ root: repo.root, file: 'app/utils/x.js', config })
+  assert.equal(r.pattern, 'utils/x')
+  assert.deepEqual(r.history.timeline.map((e) => e.from), ['app/pages/index.vue'])
+})
+
+test('traceHistory：配置了额外的扩展名，才会在这类文件里找引用', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/utils/x.js', 'export const x = 1\n')
+  repo.commit('新增 x', { date: '2024-01-01' })
+  repo.write('src/pages/index.astro', "---\nimport { x } from '@/utils/x'\n---\n")
+  repo.commit('astro 页面引用 x', { date: '2024-02-01' })
+
+  // 默认配置不扫 .astro
+  const before = traceHistory({ root: repo.root, file: 'src/utils/x.js' })
+  assert.deepEqual(before.history.timeline, [])
+
+  const config = resolveConfig({ extensions: [...DEFAULT_CONFIG.extensions, '.astro'] })
+  const after = traceHistory({ root: repo.root, file: 'src/utils/x.js', config })
+  assert.deepEqual(after.history.timeline.map((e) => e.from), ['src/pages/index.astro'])
+})
+
+test('同一提交删掉了内容不相干的同名文件：不当作移动', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/a/config.js', 'export const db = "mysql"\nexport const port = 3306\n')
+  repo.commit('a 的配置', { date: '2024-01-01' })
+  repo.run(['rm', '-q', 'src/a/config.js'])
+  repo.write('src/b/config.js', 'export default { theme: "dark" }\nexport const debug = true\n')
+  const added = repo.commit('删掉 a 的配置，新增无关的 b 配置', { date: '2024-02-01' })
+
+  const r = traceHistory({ root: repo.root, file: 'src/b/config.js' })
+  assert.equal(r.history.introduced.hash, added)
+  assert.deepEqual(r.paths, ['src/b/config.js'])
+})
+
+test('history 命令：--profile 读取项目配置', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('app/utils/x.js', 'export const x = 1\n')
+  repo.commit('新增 x')
+  repo.write('profile.js', "export default { sourceRoots: ['app'] }\n")
+
+  const r = cli('history', '--root', repo.root, '--file', 'app/utils/x.js', '--profile', `${repo.root}/profile.js`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(JSON.parse(r.stdout).pattern, 'utils/x')
+})
+
+test('history 命令：配置文件写错时报错，退出码为 1', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/a.js', '1\n')
+  repo.commit('init')
+  repo.write('profile.js', "export default { sourceRoot: ['app'] }\n") // 拼错了：少了 s
+
+  const r = cli('history', '--root', repo.root, '--file', 'src/a.js', '--profile', `${repo.root}/profile.js`)
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /不认识的配置项：sourceRoot/)
+})
+
+test('空文件移动时只加了头注释：仍认作移动', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/empty.js', '')
+  const first = repo.commit('新增空文件', { date: '2024-01-01' })
+  repo.run(['rm', '-q', 'src/utils/empty.js'])
+  repo.write('src/legacy/empty.js', '/**\n * 头注释\n * 原路径：src/utils/empty.js\n */\n')
+  repo.commit('隔离', { date: '2024-02-01' })
+
+  assert.equal(traceHistory({ root: repo.root, file: 'src/legacy/empty.js' }).history.introduced.hash, first)
+})
+
+test('旧文件是空的、新文件有代码：不认作移动', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/a/index.js', '')
+  repo.commit('新增空文件', { date: '2024-01-01' })
+  repo.run(['rm', '-q', 'src/a/index.js'])
+  repo.write('src/b/index.js', 'export const real = "code"\n')
+  const added = repo.commit('删掉空文件，新增有代码的同名文件', { date: '2024-02-01' })
+
+  assert.equal(traceHistory({ root: repo.root, file: 'src/b/index.js' }).history.introduced.hash, added)
 })
