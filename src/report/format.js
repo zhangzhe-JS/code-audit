@@ -72,3 +72,10 @@ export function groupTimeline(timeline) {
 
   return groups
 }
+/**
+ * 放进 <!-- --> 注释之前转义：把 --> 换成 -- >
+ * 不转义的话，内容里的 --> 会提前结束注释，后面的内容会被当成模板或页面内容
+ */
+export function escapeHtmlComment(text) {
+  return text.replaceAll('-->', '-- >')
+}

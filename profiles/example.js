@@ -17,5 +17,16 @@ export default {
   extensions: [...DEFAULT_CONFIG.extensions, '.astro', '.mdx'],
 
   // 报告里提交号显示几位（4～40）
-  shortHashLength: 8
+  shortHashLength: 8,
+
+  // 头注释的标题和结尾提示。默认只写「这是排查记录」，不包含任何流程要求
+  // 项目有隔离流程的话，在这里写上自己的约定，比如：
+  headerTitle: '[DEPRECATED] 已隔离：观察期后删除',
+  headerFooter: ['业务代码禁止 import 本文件；需要恢复时请移回原路径，并更新 src/_deprecated/README.md'],
+
+  // 各扩展名的注释格式（block：/** *\/，html：<!-- -->），只需要写要补充或修改的
+  headerStyles: { '.astro': 'html' },
+
+  // 状态的显示文案，只需要写要改的；状态 ID 本身不能改
+  statusLabels: { dead: '无引用，可以删除' }
 }

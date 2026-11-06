@@ -363,3 +363,21 @@ test('traceHistory：history 里带上 paths，头注释能显示原路径', (t)
   assert.deepEqual(r.history.paths, r.paths)
   assert.equal(r.history.paths.at(-1), 'src/utils/math.js')
 })
+
+test('引用匹配按完整路径：utils/math 不匹配 utils/mathHelper，但匹配带扩展名、带 /index 的写法', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+
+  repo.write('src/utils/math.js', 'export const m = 1\n')
+  repo.write('src/utils/relayout/index.js', 'export const r = 1\n')
+  repo.write('src/utils/mathHelper.js', 'export const h = 1\n')
+  repo.commit('init', { date: '2024-01-01' })
+  repo.write('src/a.js', "import { m } from './utils/math.js'\n")
+  repo.write('src/b.js', "import { r } from '@/utils/relayout/index.js'\n")
+  repo.write('src/c.js', "import { h } from '@/utils/mathHelper'\n")
+  repo.commit('各种引用写法', { date: '2024-02-01' })
+
+  const from = (file) => traceHistory({ root: repo.root, file }).history.timeline.map((e) => e.from)
+  assert.deepEqual(from('src/utils/math.js'), ['src/a.js'])
+  assert.deepEqual(from('src/utils/relayout/index.js'), ['src/b.js'])
+})

@@ -239,7 +239,7 @@ test('history.paths 可以不写；写了必须是非空的相对路径数组', 
   d.items[0].history = { introduced: commit(), lostRef: null, timeline: [] }
   assert.deepEqual(validate(d), [])
 
-  d.items[0].history.paths = ['src/legacy/a.js', 'src/a.js']
+  d.items[0].history.paths = ['src/a.js', 'src/legacy/a.js'] // 从当前到最初
   assert.deepEqual(validate(d), [])
 
   d.items[0].history.paths = []
@@ -247,4 +247,14 @@ test('history.paths 可以不写；写了必须是非空的相对路径数组', 
 
   d.items[0].history.paths = ['/abs/a.js']
   assert.match(validate(d).join(), /paths 必须是非空的相对路径数组/)
+})
+test('history.paths 的第一项必须是当前路径，不能有重复', () => {
+  const d = sample()
+  d.items[0].history = { introduced: commit(), lostRef: null, timeline: [] }
+
+  d.items[0].history.paths = ['src/legacy/a.js', 'src/a.js'] // 顺序反了
+  assert.match(validate(d).join(), /paths 的第一项必须是当前路径 src\/a\.js/)
+
+  d.items[0].history.paths = ['src/a.js', 'src/old/a.js', 'src/old/a.js']
+  assert.match(validate(d).join(), /paths 里有重复的路径/)
 })

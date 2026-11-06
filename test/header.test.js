@@ -40,7 +40,7 @@ test('完整的头注释', () => {
   })
   assert.equal(header, [
     '/**',
-    ' * [DEPRECATED] 已隔离：观察期后删除',
+    ' * [code-audit] 文件排查记录',
     ' * 状态：dead（无引用）',
     ' * 原路径：src/utils/math.js',
     ' * 移入：2026-11-05（分支 dev）',
@@ -51,7 +51,6 @@ test('完整的头注释', () => {
     ' *   - 2026-08-05 33333333 carol：去掉引用 src/views/Home.vue、src/views/Rank.vue',
     ' *   - 失去引用：2026-08-05 33333333 carol「移除旧页面」',
     ' * ⚠️ 依赖的计算库已移除，恢复引用会导致构建失败',
-    ' * 业务代码禁止 import 本文件；需要恢复时请移回原路径，并同步更新隔离清单',
     ' */'
   ].join('\n'))
 })
@@ -139,4 +138,43 @@ test('结尾提示可以配置成空数组', () => {
 
 test('没有 history 时报错，提示先运行 history', () => {
   assert.throws(() => renderHeader(item({ history: null })), /请先运行 history/)
+})
+// ---------- 按文件类型选择注释格式 ----------
+
+test('默认文案只陈述事实，不包含流程要求', () => {
+  const header = renderHeader(item())
+  assert.match(header, /^\/\*\*\n \* \[code-audit\] 文件排查记录\n/)
+  assert.doesNotMatch(header, /隔离|观察期|禁止|恢复/)
+})
+
+test('不能写注释的文件类型直接报错，不生成会破坏文件的内容', () => {
+  for (const target of ['src/data.json', 'public/index.html', 'src/Makefile']) {
+    assert.throws(() => renderHeader(item({ target, history: { ...item().history, paths: [target] } })), /不支持为 .* 文件生成头注释/)
+  }
+})
+
+test('.vue 文件用 HTML 注释', () => {
+  const target = 'src/legacy/Old.vue'
+  const header = renderHeader(item({ target, history: { ...item().history, paths: [target, 'src/views/Old.vue'] } }))
+  assert.match(header, /^<!--\n  \[code-audit\] 文件排查记录\n  状态：dead（无引用）\n  原路径：src\/views\/Old\.vue\n/)
+  assert.match(header, /\n-->$/)
+})
+
+test('HTML 注释里的 --> 会被转义，不会提前结束注释', () => {
+  const target = 'src/legacy/Old.vue'
+  const header = renderHeader(item({ target, notes: ['a --> b'], history: { ...item().history, paths: [target] } }))
+  assert.equal(header.match(/-->/g).length, 1) // 只有最后的结尾
+  assert.match(header, /a -- > b/)
+})
+
+test('注释格式可以按扩展名配置：补充新类型，或关闭某种类型', () => {
+  const astro = 'src/pages/old.astro'
+  const config = resolveConfig({ headerStyles: { '.astro': 'html', '.js': null } })
+  assert.match(renderHeader(item({ target: astro, history: { ...item().history, paths: [astro] } }), { config }), /^<!--/)
+  assert.throws(() => renderHeader(item(), { config }), /不支持为 \.js 文件生成头注释/)
+})
+
+test('状态文案来自配置，状态 ID 不变', () => {
+  const config = resolveConfig({ statusLabels: { dead: 'unused' } })
+  assert.match(renderHeader(item(), { config }), /状态：dead（unused）/)
 })

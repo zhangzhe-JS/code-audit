@@ -37,6 +37,16 @@ export function historicalPaths(root, file, rev = 'HEAD') {
 }
 
 /**
+ * 代码里是否以「完整的路径」出现了 pattern：前后不能紧挨着能组成文件名的字符
+ * - utils/math 不匹配 utils/mathHelper、myutils/math（只是名字的一部分，是别的文件）
+ * - utils/math 匹配 'utils/math'、utils/math.js、utils/math/index（后面跟的是引号、扩展名、子路径）
+ * 已知限制：utils/math 也会匹配 utils/math.config（点号后面无法区分是扩展名还是文件名的一部分）
+ */
+export function containsPath(code, pattern) {
+  return new RegExp(`(?<![\\w$-])${escapeRegex(pattern)}(?![\\w$-])`).test(code)
+}
+
+/**
  * 某个提交时，哪些文件在注释以外的地方包含 pattern
  * @param {string | Set<string>} [exclude] 要排除的文件（目标文件自己），可以传多个路径
  * @param {readonly string[]} [extensions] 只在这些扩展名的文件里找，默认取 DEFAULT_CONFIG
@@ -66,7 +76,7 @@ export function refsAt(root, commit, pattern, exclude, extensions = DEFAULT_CONF
 
     // 读出这个提交时的完整文件，去掉注释后再确认
     const code = git(root, ['show', `${commit}:${file}`])
-    if (stripComments(code).includes(pattern)) files.add(file)
+    if (containsPath(stripComments(code), pattern)) files.add(file)
   }
   return files
 }

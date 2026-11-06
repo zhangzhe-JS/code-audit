@@ -88,3 +88,9 @@ test('提交号长度不合法时报错，不返回看起来正常的错误结�
 test('groupTimeline：不认识的 change 报错，不悄悄当成去掉', () => {
   assert.throws(() => groupTimeline([{ commit: c1, change: 'oops', from: 'src/a.vue' }]), /change 不合法/)
 })
+
+test('escapeHtmlComment：--> 换成 -- >，所有出现的地方都换', async () => {
+  const { escapeHtmlComment } = await import('../src/report/format.js')
+  assert.equal(escapeHtmlComment('a --> b --> c'), 'a -- > b -- > c')
+  assert.equal(escapeHtmlComment('普通说明'), '普通说明')
+})

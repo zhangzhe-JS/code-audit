@@ -48,3 +48,24 @@ test('头注释的标题和结尾提示可以配置，并校验', () => {
   assert.throws(() => resolveConfig({ headerFooter: ['ok', ''] }), /headerFooter/)
   assert.throws(() => resolveConfig({ headerFooter: 'not array' }), /headerFooter/)
 })
+test('默认头注释只陈述事实：标题不含流程要求，结尾提示为空', () => {
+  assert.doesNotMatch(DEFAULT_CONFIG.headerTitle, /隔离|删除|禁止/)
+  assert.deepEqual(DEFAULT_CONFIG.headerFooter, [])
+})
+
+test('headerStyles 按扩展名合并，并校验', () => {
+  const c = resolveConfig({ headerStyles: { '.astro': 'html', '.vue': null } })
+  assert.equal(c.headerStyles['.astro'], 'html')
+  assert.equal(c.headerStyles['.vue'], null)
+  assert.equal(c.headerStyles['.js'], 'block') // 没写的保留默认
+  assert.throws(() => resolveConfig({ headerStyles: { '.js': 'line' } }), /headerStyles\["\.js"\]/)
+  assert.throws(() => resolveConfig({ headerStyles: { js: 'block' } }), /键必须是扩展名/)
+})
+
+test('statusLabels 按状态合并，并校验', () => {
+  const c = resolveConfig({ statusLabels: { dead: 'unused' } })
+  assert.equal(c.statusLabels.dead, 'unused')
+  assert.equal(c.statusLabels.live, DEFAULT_CONFIG.statusLabels.live)
+  assert.throws(() => resolveConfig({ statusLabels: { removed: 'x' } }), /不认识的状态：removed/)
+  assert.throws(() => resolveConfig({ statusLabels: { dead: '' } }), /statusLabels\["dead"\]/)
+})

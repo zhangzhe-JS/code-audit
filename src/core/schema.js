@@ -29,13 +29,13 @@ export const KINDS = ['file', 'export', 'api']
  * - unknown       无法判定：存在拼接路径的动态 import、window[name] 等写法
  *                 工具宁可承认不知道，也不猜测为 dead
  * - external      在 import 图之外被使用：构建配置、index.html、public、其他项目
- *                 （例：vite-config/resolve.js 里作为别名替换的 fpv-excel-engine-stub.js）
+ *                 （例：只在构建配置里作为别名替换目标的文件）
  * - pending       其他分支在用：当前分支没人用，但未合并的分支引用了它
  *                 等那个分支合并或关闭后再判断
  * - dormant       注释停用：引用被注释掉，以后可能恢复
- *                 必须留在原位，不能隔离（例：browser-check.js）
+ *                 必须留在原位，不能隔离（例：入口里被注释掉、准备以后再启用的 import）
  * - internal      本文件内部在用：外部没人 import，但被文件内在用的函数调用
- *                 不能删，最多去掉 export（例：base64ToBlob）
+ *                 不能删，最多去掉 export（例：被同文件导出函数调用的工具函数）
  *
  * 后 4 种：
  * - live          在用：从入口顺着 import 能找到
@@ -78,7 +78,7 @@ export const STATUS_LABELS = Object.freeze({
  * - global-mount   通过全局挂载使用（如 Vue.prototype.$log），模板里用 $xxx 访问
  * - dev-only       只在开发环境或 mock 中使用
  * - type-only      只用作 TS 类型（import type），构建后不存在
- * - replaced-by    已被新实现替代（如 pdfjsLib.js 包装层被直接 import pdfjs-dist 取代）
+ * - replaced-by    已被新实现替代（如自己写的包装层被直接引用第三方库取代）
  * - business-check 代码能访问到，但业务入口可能已关闭（路由还在、菜单隐藏），需人工确认
  */
 export const TAGS = [
@@ -281,6 +281,14 @@ function validateItem(item, at, err) {
   }
 
   if (item.history !== null) validateHistory(item.history, `${at}.history`, err)
+  // paths 是「从当前到最初」的顺序：第一项必须是当前路径，头注释取最后一项当原路径
+  const paths = item.history?.paths
+  if (Array.isArray(paths) && paths.length > 0) {
+    if (paths[0] !== item.target) {
+      err(`${at}.history.paths 的第一项必须是当前路径 ${item.target}，实际是 ${paths[0]}`)
+    }
+    if (new Set(paths).size !== paths.length) err(`${at}.history.paths 里有重复的路径`)
+  }
   if (item.verify !== null) validateVerify(item.verify, `${at}.verify`, err)
   // notes 可以不写；写了就必须是非空字符串组成的数组
   if (item.notes !== undefined) {
