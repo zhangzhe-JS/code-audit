@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中（M0 仓库骨架）。下文的命令是规划中的用法，尚未全部实现。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，可以用 history + report 生成排查报告和头注释；scan、rules、verify 还没做。进度见 `docs/progress.md`。
 
 ---
 
@@ -118,21 +118,64 @@ code-audit/
 
 ---
 
-## 用法（规划中）
+## 用法
+
+### 已经可以用的：history + report
+
+**1. 写候选清单**（以后由 scan 自动生成），放在被分析的仓库外面：
+
+```json
+{
+  "project": "my-app",
+  "entries": ["src/main.js"],
+  "files": [
+    { "file": "src/utils/old.js" },
+    { "file": "src/_deprecated/math.js", "notes": ["依赖已移除，恢复引用会导致构建失败"] },
+    { "file": "src/lib/x.js", "pattern": "lib/x" }
+  ]
+}
+```
+
+`pattern` 可以不写，默认由文件最初的路径推出；`notes` 是人工备注，会原样出现在报告和头注释里。
+
+**2. 批量查 git 历史**，输出符合 schema 的完整数据：
 
 ```bash
-# 分析：只读
-node bin/code-audit.js scan    --root ../path/to/project --profile <项目名>
-node bin/code-audit.js history --root ../path/to/project --in scan.json
-node bin/code-audit.js verify  --root ../path/to/project --in scan.json
-node bin/code-audit.js report  --in scan.json --out reports/<项目名>/
+node bin/code-audit.js history --root ../my-app --in candidates.json --out reports/my-app/data.json
+```
 
-# 单个文件的 git 历史
-node bin/code-audit.js history --root ../path/to/project \
-  --file src/utils/xxx.js --pattern "utils/xxx" --rev <提交号>
+**3. 生成报告、隔离清单、头注释**：
 
-# 隔离：会改动目标项目，需要显式执行
-node bin/code-audit.js quarantine --root ../path/to/project --in scan.json
+```bash
+node bin/code-audit.js report --in reports/my-app/data.json --out reports/my-app/out --moved-at 2026-11-05
+```
+
+输出目录里有：
+
+```
+report.md             排查报告：概况、状态汇总、清单、每项详情
+quarantine-table.md   隔离清单表格
+headers/<路径>.txt    每个文件的头注释（没有历史或不能写注释的文件会跳过，并说明原因）
+```
+
+查单个文件：
+
+```bash
+node bin/code-audit.js history --root ../my-app --file src/utils/old.js
+```
+
+两个命令都支持 `--profile profiles/<项目名>.js`，用项目配置覆盖默认值（源码目录、扩展名、文案、表格列等），写法见 `profiles/example.js`。
+
+**安全约定**：输出不能写在被分析的仓库里；输出文件已存在、输出目录不为空时直接报错，工具不覆盖、不删除已有文件。
+
+现阶段候选清单是人工写的，还没有经过规则判定，所以每一项的状态都是 `unknown`。
+
+### 规划中
+
+```bash
+node bin/code-audit.js scan       --root ../my-app --profile profiles/my-app.js   # M3：自动找出候选
+node bin/code-audit.js verify     --root ../my-app --in data.json                 # M5：实删验证
+node bin/code-audit.js quarantine --root ../my-app --in data.json                 # M7：隔离（会改动目标项目）
 ```
 
 ---

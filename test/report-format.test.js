@@ -111,3 +111,10 @@ test('inlineCode：普通文字用一个反引号；文字里有反引号时用�
   assert.equal(inlineCode('a`b'), '`` a`b ``')
   assert.equal(inlineCode('a\nb'), '`a b`')
 })
+
+test('inlineCode：围栏比内容里最长的一串反引号多一个；开头或结尾有空格时补空格保留原样', async () => {
+  const { inlineCode } = await import('../src/report/format.js')
+  assert.equal(inlineCode('a``b'), '``` a``b ```')
+  assert.equal(inlineCode('```x'), '```` ```x ````')
+  assert.equal(inlineCode(' setting.js'), '`  setting.js `')
+})

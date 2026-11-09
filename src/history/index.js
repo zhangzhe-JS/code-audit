@@ -36,7 +36,7 @@ export function traceHistory({ root, file, pattern, rev = 'HEAD', config = DEFAU
   const timeline = buildTimeline(root, usedPattern, { rev, exclude: paths, extensions: config.extensions })
   const lostRef = findLostRef(timeline)
 
-  return { pattern: usedPattern, paths, history: { introduced, lostRef, timeline, paths } }
+  return { pattern: usedPattern, paths, history: { introduced, lostRef, timeline, paths, pattern: usedPattern } }
 }
 
 /**

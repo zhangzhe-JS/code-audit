@@ -258,3 +258,23 @@ test('history.paths 的第一项必须是当前路径，不能有重复', () => 
   d.items[0].history.paths = ['src/a.js', 'src/old/a.js', 'src/old/a.js']
   assert.match(validate(d).join(), /paths 里有重复的路径/)
 })
+
+test('history.pattern 可以不写；写了必须是非空字符串', () => {
+  const d = sample()
+  d.items[0].history = { introduced: commit(), lostRef: null, timeline: [], pattern: 'utils/a' }
+  assert.deepEqual(validate(d), [])
+  d.items[0].history.pattern = ''
+  assert.match(validate(d).join(), /pattern 必须是非空字符串/)
+})
+
+test('路径里不能有 .. 这一级（文件名里带两个点不算）', () => {
+  const d = sample()
+  d.items[0].target = 'src/../a.js'
+  d.items[0].id = 'file:src/../a.js'
+  assert.match(validate(d).join(), /target 必须是相对路径/)
+
+  const ok = sample()
+  ok.items[0].target = 'src/a..b.js'
+  ok.items[0].id = 'file:src/a..b.js'
+  assert.deepEqual(validate(ok), [])
+})

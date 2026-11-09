@@ -117,3 +117,15 @@ test('状态文案、表格的列、提交号长度来自配置', () => {
   assert.match(md, /- 分析提交：`1111111`\n/)
   assert.match(md, /- 状态：dead（unused）/)
 })
+
+test('详情：显示搜索的引用写法，方便判断有没有漏掉的引用', () => {
+  const r = one()
+  r.items[0].history.pattern = 'utils/math'
+  assert.match(renderReport(r), /  - 搜索的引用写法：`utils\/math`\n/)
+})
+
+test('状态汇总：配置里的状态文案带 | 或换行时也会转义，表格列数不变', () => {
+  const config = resolveConfig({ statusLabels: { dead: 'a | b\nc' } })
+  const row = section(renderReport(full(), { config }), '状态汇总').split('\n').find((l) => l.startsWith('| dead'))
+  assert.equal(row, '| dead（a \\| b c） | 1 |')
+})

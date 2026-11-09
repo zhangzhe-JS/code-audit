@@ -93,9 +93,14 @@ export function oneLine(text) {
 
 /**
  * 把文字包成 Markdown 行内代码
- * 文字里本身有反引号时，用两个反引号包起来并在两侧加空格，否则代码会提前结束
+ * 围栏（两边的反引号）要比文字里最长的一串连续反引号多一个，否则代码会在中间提前结束：
+ *   src/a.js → `src/a.js`      a`b → `` a`b ``      a``b → ``` a``b ```
+ * 文字里有反引号，或者以空格开头、结尾时，两侧各加一个空格（Markdown 显示时会去掉这一个空格）
  */
 export function inlineCode(text) {
   const t = oneLine(text)
-  return t.includes('`') ? `\`\` ${t} \`\`` : `\`${t}\``
+  const longest = Math.max(0, ...(t.match(/`+/g) ?? []).map((run) => run.length))
+  const fence = '`'.repeat(longest + 1)
+  const pad = longest > 0 || t.startsWith(' ') || t.endsWith(' ') ? ' ' : ''
+  return `${fence}${pad}${t}${pad}${fence}`
 }

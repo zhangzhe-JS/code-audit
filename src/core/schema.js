@@ -163,6 +163,8 @@ export const VIAS = ['static', 'reexport', 'glob', 'dynamic', 'comment', 'config
  * @property {Commit|null} lostRef  null = 从来没被引用过
  * @property {{commit: Commit, change: 'add'|'remove', from: string}[]} timeline
  * @property {string[]} [paths]  文件用过的所有路径，从当前到最初；最后一个是原路径
+ * @property {string} [pattern]   查找引用时搜索的字符串。按字面搜索，结论的可信度取决于它：
+ *                                比如同目录的相对路径引用（'./x'）不包含它，就会漏算
  */
 
 /**
@@ -350,6 +352,7 @@ function validateHistory(h, at, err) {
       err(`${at}.paths 必须是非空的相对路径数组`)
     }
   }
+  if (h.pattern !== undefined && !isNonEmptyString(h.pattern)) err(`${at}.pattern 必须是非空字符串`)
 }
 
 function validateVerify(v, at, err) {
@@ -401,6 +404,10 @@ function isAbsolute(v) {
 }
 
 /** 相对路径：非空、不是绝对路径、统一用 / 分隔 */
+/**
+ * 相对路径：非空、不是绝对路径、统一用 / 分隔、不含 .. 这一级
+ * 不允许 ..：项目内的路径用不到它；按这些路径生成输出文件时，.. 会让文件写到输出目录外面
+ */
 function isRelativePath(v) {
-  return isNonEmptyString(v) && !isAbsolute(v) && !v.includes('\\')
+  return isNonEmptyString(v) && !isAbsolute(v) && !v.includes('\\') && !v.split('/').includes('..')
 }

@@ -7,7 +7,7 @@
  */
 import { DEFAULT_CONFIG } from '../core/config.js'
 import { STATUSES, validate } from '../core/schema.js'
-import { formatCommit, shortHash, groupTimeline, oneLine, inlineCode } from './format.js'
+import { formatCommit, shortHash, groupTimeline, oneLine, inlineCode, escapeTableCell } from './format.js'
 import { renderQuarantineTable } from './quarantine-table.js'
 
 /**
@@ -51,7 +51,8 @@ function renderSummary(items, config) {
 
   const rows = STATUSES
     .filter((s) => counts.has(s))
-    .map((s) => `| ${s}（${config.statusLabels[s]}） | ${counts.get(s)} |`)
+    // 状态文案来自配置，可能带 | 或换行，和其他表格单元格一样要转义
+    .map((s) => `| ${escapeTableCell(`${s}（${config.statusLabels[s]}）`)} | ${counts.get(s)} |`)
 
   return [
     '## 状态汇总',
@@ -96,6 +97,8 @@ function renderItem(item, config) {
     lines.push('- 历史：')
     const origin = h.paths?.at(-1)
     if (origin && origin !== item.target) lines.push(`  - 原路径：${inlineCode(origin)}`)
+    // 时间线是按字面搜索这个字符串得出的；看报告的人据此判断有没有漏掉的引用写法
+    if (h.pattern) lines.push(`  - 搜索的引用写法：${inlineCode(h.pattern)}`)
     lines.push(`  - 引入：${oneLine(full(h.introduced))}`)
     for (const g of groupTimeline(h.timeline)) {
       const parts = []
