@@ -14,7 +14,7 @@ import { createRepo } from './helpers/repo.js'
  * 已经做好规则的状态：这些状态要和标准答案完全一致。
  * 其余状态的规则还没做，只检查文件被列为候选、暂时标着「未判定」。每做完一条规则就加进来
  */
-const IMPLEMENTED = new Set(['unknown'])
+const IMPLEMENTED = new Set(['unknown', 'external'])
 
 let hasKnip = true
 try {

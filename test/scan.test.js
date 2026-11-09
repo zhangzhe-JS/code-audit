@@ -266,6 +266,27 @@ test('scan：规则层判定状态，落在动态加载范围里的是 unknown�
   assert.deepEqual(validateCandidates(r.candidates), [])
 })
 
+test('scan：构建配置里写着路径的判为 external；测试文件里写的不算', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('vite.config.js', "export default { alias: { x: 'src/dead.js' } }\n")
+  repo.write('tests/helper.spec.js', "const p = 'src/helper.js'\n")
+  repo.commit('配置')
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/helper.js'], withTests: ['src/dead.js', 'src/helper.js'] })
+  const config = resolveConfig({ entries: ['src/main.js'], testEntries: ['tests/**/*.spec.js'] })
+  const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
+
+  const [dead, helper] = r.candidates.files
+  assert.equal(dead.status, 'external')
+  assert.deepEqual(dead.refs, [{ from: 'vite.config.js', line: 1, via: 'config' }])
+  assert.equal(helper.status, 'unknown')
+  assert.deepEqual(helper.refs, [])
+})
+
 test('scan：生成的候选清单能通过 history 的校验', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()

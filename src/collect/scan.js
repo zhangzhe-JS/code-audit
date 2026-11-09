@@ -7,7 +7,8 @@
  * 2. 找出 import.meta.glob，换算成入口：knip 不认识这种写法
  * 3. 只用项目入口跑一次 knip：得到「从入口走不到」的文件
  * 4. 配置了测试入口时，再加上测试入口跑一次：两次一比，就知道哪些「只被测试用到」
- * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的，判为 unknown
+ * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的判为 unknown，
+ *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external
  *
  * 候选清单里写好状态、证据、引用，history 只补历史，不改结论
  */
@@ -18,6 +19,7 @@ import { findGlobImports } from './glob-imports.js'
 import { buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
 import { createSnapshot } from './snapshot.js'
 import { findDynamicLoads } from './dynamic-imports.js'
+import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external-refs.js'
 import { judge } from '../rules/index.js'
 
 /**
@@ -68,15 +70,22 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
   const byExt = (f) => config.extensions.some((e) => f.endsWith(e))
 
   // 1. 导出文件：整个提交里配置扩展名的文件（源码目录外的文件也可能 import 源码，影响分析结果），
-  //    加上入口、测试入口匹配到的文件和根目录的配置文件
+  //    加上入口、测试入口匹配到的文件、根目录的配置文件，以及规则层要搜的其他文本文件
   const sources = snap.list(config.sourceRoots).filter(byExt)
   const testFiles = new Set(snap.list(globs(config.testEntries)))
   const ignored = new Set(snap.list(globs(config.scanIgnore)))
+  const others = externalFiles({
+    all: snap.list(globs(EXTERNAL_EXTENSIONS.map((e) => `**/*${e}`))),
+    sourceRoots: config.sourceRoots,
+    extensions: config.extensions,
+    exclude: testFiles
+  })
   const extracted = new Set([
     ...snap.list(globs(config.extensions.map((e) => `**/*${e}`))),
     ...snap.list(globs(config.entries)),
     ...testFiles,
-    ...snap.list(ROOT_FILES)
+    ...snap.list(ROOT_FILES),
+    ...others
   ])
   snap.extract([...extracted].sort())
   // knip 要求根目录有 package.json；提交里没有时，在临时目录补一个空的（不影响分析，也不碰原仓库）
@@ -133,7 +142,11 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
       detail: `动态加载的路径确定不了范围：${l.expr}，被它加载的文件可能被误报为没人用`
     })
   }
-  const judged = judge({ files, loads })
+  const externalRefs = findExternalRefs({
+    files: others.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') })),
+    targets: files.map((f) => f.file)
+  })
+  const judged = judge({ files, loads, externalRefs })
   const byStatus = {}
   for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
 

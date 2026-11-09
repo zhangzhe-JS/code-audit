@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）进行中：已做动态加载（`unknown`），其余状态还没判定，暂时也标 `unknown` 并在证据里说明。verify 还没做。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）进行中：已做动态加载（`unknown`）、图外使用（`external`），其余状态还没判定，暂时也标 `unknown` 并在证据里说明。verify 还没做。进度见 `docs/progress.md`。
 
 ---
 
@@ -145,6 +145,8 @@ scan 先找出「从入口走不到」的文件，再由规则层（`src/rules/`
 
 路径里有变量的动态加载（`import('./views/' + name)`、`require.context('./modules')` 等），按路径里固定的开头和结尾圈出可能加载的文件，落在范围里的候选判为 `unknown`，引用里记下加载的位置。路径开头就是变量（如 `import(path)`）时范围确定不了，只在输出里提示。模板字符串里的变量（`` import(`./views/${name}.vue`) ``）knip 自己能处理，这些文件不会列为候选。
 
+knip 不分析的文件（构建配置、脚本、index.html、package.json，源码目录里的 json 等）里写着候选的路径时，判为 `external`，比如 vite 配置里 `path.resolve(__dirname, 'src/shims/stub.js')`。测试文件里写的不算。
+
 knip 的插件会加载项目里的配置文件（等于执行项目代码），所以 scan 关掉了全部插件，只保留解析 `.vue` / `.svelte` / `.astro` 的插件，并且不让它们读配置文件；跑完还会核对实际启用了哪些插件，有漏关的就报错。
 
 也可以不用 scan，手写候选清单：
@@ -193,7 +195,7 @@ node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 
 **安全约定**：输出不能写在被分析的仓库里；输出文件已存在、输出目录不为空时直接报错，工具不覆盖、不删除已有文件。
 
-规则层还没做完：目前只判定动态加载。其余候选暂时也是 `unknown`，证据里写着「规则层还没做完」，和真正「无法判定」的可以区分开。
+规则层还没做完：目前判定动态加载和图外使用。其余候选暂时也是 `unknown`，证据里写着「规则层还没做完」，和真正「无法判定」的可以区分开。
 
 ### 规划中
 

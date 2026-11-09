@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：293 个，全部通过（`npm test`）
+- 测试：304 个，全部通过（`npm test`）
 
 ---
 
@@ -15,7 +15,7 @@
 | M1 | history 模块：引入、引用时间线、失去引用 | ✅ 完成（d4a518a） |
 | M2 | report：从 JSON 生成 Markdown 报告、文件头注释 | ✅ 完成（06c07de） |
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
-| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（动态加载）完成（待提交） |
+| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（306951b）、② external（待提交） |
 | M5 | verify：临时 worktree 实删，和构建 / 测试基线对比 | ⏳ 未开始 |
 | M6 | 接入第二个项目（Vue3 + TS） | ⏳ 未开始 |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
@@ -178,8 +178,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 
 | 顺序 | 状态 | 做法 | 状态 |
 |---|---|---|---|
-| ① | `unknown` | 路径里有变量的动态加载，圈出可能加载的文件 | ✅ 完成（待提交） |
-| ② | `external` | 在构建配置、index.html、scripts、public 里搜文件路径 | ⏳ |
+| ① | `unknown` | 路径里有变量的动态加载，圈出可能加载的文件 | ✅ 306951b |
+| ② | `external` | 在 knip 不分析的文件里搜候选的路径 | ✅ 完成（待提交） |
 | ③ | `dormant` | 在注释里搜引用 | ⏳ |
 | ④ | `test-only` | 直接用 scan 的 knip 证据 | ⏳ |
 | ⑤ | `dead-only-ref` | 候选之间的引用关系 | ⏳ |
@@ -206,6 +206,19 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] finicr-web：所有 `import()` 都是固定路径，没有动态加载，结果不变（58 个候选）
 - [x] 反向检查：逐个撤掉关键逻辑（保留状态和引用、排除自己、非递归、省略扩展名、优先级、参数里的正则），每处都有测试失败
 
+### ② external：图外使用
+
+- [x] `src/collect/external-refs.js`：在 knip 不分析的文件里找候选的路径
+  - 搜哪些文件：提交里的文本文件（js 类、json、html、yml、sh），去掉 knip 分析的源码文件；
+    即源码目录外的一切（构建配置、脚本、index.html、package.json），加上源码目录里的非源码文件（如 json 菜单配置）
+  - 不搜：测试文件（测试里写的路径算「只有测试用到」）、锁文件
+  - 匹配：去掉扩展名的路径，可带原扩展名；两侧有边界，`src/a` 不匹配 `src/a.config.js`、`src/a/b.js`、`src/ab.js`；index 文件也认目录写法
+  - JS 类文件先去注释：注释掉的引用不算（留给 ③ dormant）；html、json 原样搜
+  - 没有新增配置项：搜索范围由 sourceRoots、extensions、testEntries 推出
+- [x] `src/rules/external.js`：命中的判为 `external`，每处一条证据、一条引用（`via: config`）
+- [x] finicr-web：正好找出 M3 时人工确认的 2 个——`src/shims/fpv-excel-engine-stub.js`（vite-config/resolve.js）、`src/i18n/menu.js`（scripts/generateMenuI18n.js），没有多报
+- [x] 反向检查：逐个撤掉 9 处关键逻辑（排除测试文件、去注释、左右边界、index 目录写法、带扩展名、源码目录里的非源码文件、规则注册、导出要搜的文件），每处都有测试失败
+
 ---
 
 ## 已知问题
@@ -226,6 +239,9 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | scan：写 import.meta.glob 的文件本身没人用时，被它加载的文件也当成在用 | 少报 | 低。不会误删 |
 | 动态加载的路径开头就是变量（`import(path)`）时范围确定不了，只发警告 | 被它加载的文件仍会列为候选，状态暂时是「规则未做完」的 unknown；规则做完后可能落到 dead | 中。规则做完前要想办法：比如有这类警告时整批不判 dead |
 | 字符串里出现 `import(`、`require(` 字样时也会当成调用 | 多圈文件、多发警告 | 低。不会误删 |
+| external 只认从仓库根目录写起的路径：配置里相对自身目录的写法（如 `build/` 下写 `'./x'`）、拼接出来的路径找不到 | 漏判 external，可能落到 dead | 中。实删前还有 verify（构建会报错） |
+| external：省略扩展名的路径同时也是目录名时（`'src/i18n/menu'` 指目录），也算引用了 `src/i18n/menu.js` | 多一条证据 | 低。模块解析本来也是文件优先 |
+| external：html 里 `<!-- -->` 注释掉的路径仍算 | 多判 external | 低。不会误删 |
 
 已确认不是问题：
 

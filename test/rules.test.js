@@ -60,3 +60,21 @@ test('judge：命中多条规则时取优先级最高的状态，证据和引用
   assert.deepEqual(r.evidence.map((e) => e.rule), ['knip-unreachable', 'r-dead', 'r-dormant'])
   assert.deepEqual(r.refs.map((x) => x.from), ['a.js', 'b.js'])
 })
+
+test('judge：knip 不分析的文件里写着路径的判为 external；同时在动态加载范围里时 unknown 优先', () => {
+  const externalRefs = new Map([
+    ['src/v/a.vue', [{ from: 'vite.config.js', line: 4, text: "path.resolve('src/v/a.vue')" }]],
+    ['src/stub.js', [{ from: 'vite.config.js', line: 9, text: "'src/stub.js'" }]]
+  ])
+  const [a, stub] = judge({
+    files: [{ file: 'src/v/a.vue', evidence: [knipEv] }, { file: 'src/stub.js', evidence: [knipEv] }],
+    loads: [load('src/router.js', 3, views)],
+    externalRefs
+  })
+  assert.equal(stub.status, 'external')
+  assert.match(stub.evidence[1].detail, /vite\.config\.js:9 写着它的路径：'src\/stub\.js'/)
+  assert.deepEqual(stub.refs, [{ from: 'vite.config.js', line: 9, via: 'config' }])
+  assert.equal(a.status, 'unknown')
+  assert.deepEqual(a.evidence.map((e) => e.rule), ['knip-unreachable', 'dynamic-load', 'external-ref'])
+  assert.deepEqual(a.refs.map((r) => r.via), ['dynamic', 'config'])
+})

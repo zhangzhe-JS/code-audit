@@ -1,0 +1,12 @@
+{
+  "description": "图外使用：构建配置、脚本、json 配置里写着路径的是 external；注释掉的、名字相近的不算",
+  "entries": ["src/main.js"],
+  "items": [
+    { "id": "file:src/commented.js", "status": "dormant" },
+    { "id": "file:src/i18n/menu.js", "status": "external" },
+    { "id": "file:src/legacy/index.js", "status": "external" },
+    { "id": "file:src/shims/stub.js", "status": "external" },
+    { "id": "file:src/similar.js", "status": "dead" },
+    { "id": "file:src/used.js", "status": "live" }
+  ]
+}
