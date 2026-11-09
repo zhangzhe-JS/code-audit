@@ -9,12 +9,13 @@
  * 4. 配置了测试入口时，再加上测试入口跑一次：两次一比，就知道哪些「只被测试用到」
  * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的判为 unknown，
  *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external，在用的代码里有注释掉的引用的判为 dormant，
- *    只有测试用到的判为 test-only；再顺着候选之间的 import 传递，只被没人用的文件引用的判为 dead-only-ref
+ *    没合并的分支在用的判为 pending，只有测试用到的判为 test-only；
+ *    再顺着候选之间的 import 传递，只被没人用的文件引用的判为 dead-only-ref
  *
  * 候选清单里写好状态、证据、引用，history 只补历史，不改结论
  */
 import { DEFAULT_CONFIG } from './../core/config.js'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { findGlobImports } from './glob-imports.js'
 import { addCompilerDeps, buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
@@ -23,6 +24,8 @@ import { findDynamicLoads } from './dynamic-imports.js'
 import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external-refs.js'
 import { findCommentRefs } from './comment-refs.js'
 import { findImportRefs } from './path-refs.js'
+import { findBranchRefs } from './branch-refs.js'
+import { findGlobalComponents, findTagUses, injectImports, mergeRefs } from './global-components.js'
 import { judge } from '../rules/index.js'
 
 /**
@@ -60,13 +63,13 @@ export function scan({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', kni
 
   const snap = createSnapshot(root, rev)
   try {
-    return scanSnapshot({ snap, project, config, knip, pluginNames, run })
+    return scanSnapshot({ root, snap, project, config, knip, pluginNames, run })
   } finally {
     snap.cleanup()
   }
 }
 
-function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
+function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   const byExt = (f) => config.extensions.some((e) => f.endsWith(e))
 
   // 1. 导出文件：整个提交里配置扩展名的文件（源码目录外的文件也可能 import 源码，影响分析结果），
@@ -109,6 +112,14 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
   const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
   const { globs: globImports, warnings } = findGlobImports({ files: contents, aliases: config.aliases })
   const globEntries = [...new Set(globImports.map((g) => g.resolved))]
+  // 测试文件：在临时目录被改动（下面补 import）之前读出原样
+  const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+
+  // 全局注册的组件（见 global-components.js）：拿掉声明文件，模板里的标签用法补成 import 交给 knip
+  const globals = findGlobalComponents({ files: contents, sourceSet: new Set(sources), aliases: config.aliases })
+  for (const d of globals.declarations) rmSync(join(snap.dir, d), { force: true })
+  const tagUses = findTagUses({ files: [...contents, ...testContents.filter((t) => !sources.includes(t.path))], components: globals.components })
+  injectImports(snap.dir, tagUses)
 
   // 参与分析的文件：源码目录下、配置的扩展名
   const projectGlobs = config.sourceRoots.flatMap((dir) => config.extensions.map((ext) => `${dir}/**/*${ext}`))
@@ -174,11 +185,16 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
     aliases: config.aliases
   })
   // 测试文件里的 import：只有测试用到的候选，列出是哪些测试
-  const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-  const testRefs = findImportRefs({ files: testContents, targets, aliases: config.aliases })
+  const onlyFrom = (refs, from) => new Map([...refs].map(([k, v]) => [k, v.filter((r) => from.has(r.from))]).filter(([, v]) => v.length > 0))
+  const testRefs = mergeRefs(findImportRefs({ files: testContents, targets, aliases: config.aliases }), onlyFrom(tagUses, testFiles))
   // 候选之间的 import：只被没人用的文件引用的，跟着引用方处理
-  const importers = findImportRefs({ files: contents.filter((c) => candidateSet.has(c.path)), targets, aliases: config.aliases })
-  const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, importers })
+  const importers = mergeRefs(
+    findImportRefs({ files: contents.filter((c) => candidateSet.has(c.path)), targets, aliases: config.aliases }),
+    new Map([...onlyFrom(tagUses, candidateSet)].filter(([k]) => candidateSet.has(k)))
+  )
+  // 没合并的分支：分支自己改过的文件里 import 了候选，或者改了候选本身
+  const branchScan = findBranchRefs({ root, rev: snap.commit, targets, extensions: config.extensions, aliases: config.aliases, branches: config.branches })
+  const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, branchRefs: branchScan.refs, importers })
   const byStatus = {}
   for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
 
@@ -200,7 +216,9 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
       },
       dynamicLoads: allLoads.length,
       reviewedLoads: reviewedLoads.length,
+      branches: { checked: branchScan.checked, skipped: branchScan.skipped, byBranch: refsByBranch(branchScan.refs) },
       addedDeps,
+      globalComponents: { declarations: globals.declarations, components: globals.components.size, used: tagUses.size },
       outside: skipped.outside
     }
   }
@@ -214,6 +232,19 @@ function evidenceFor(file, { withTests, stillUnused, version }) {
     return { rule: SCAN_RULES.unreachable, detail: `从入口和测试入口都走不到（knip ${version}）` }
   }
   return { rule: SCAN_RULES.testOnly, detail: `从入口走不到，只有测试用到（knip ${version}）` }
+}
+
+/** 每个分支引用了哪些候选：输出里告诉用户是哪些分支导致了 pending，好决定要不要在配置里排除 */
+function refsByBranch(refs) {
+  const by = new Map()
+  for (const [file, list] of refs) {
+    for (const r of list) {
+      const entry = by.get(r.branch) ?? { branch: r.branch, date: r.date, files: [] }
+      if (!entry.files.includes(file)) entry.files.push(file)
+      by.set(r.branch, entry)
+    }
+  }
+  return [...by.values()].sort((a, b) => (a.date > b.date ? -1 : a.date < b.date ? 1 : a.branch < b.branch ? -1 : 1))
 }
 
 /** 这处动态加载有没有人工确认过：按写加载的文件和写法匹配；确认过返回那条配置 */

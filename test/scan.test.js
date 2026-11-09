@@ -384,6 +384,35 @@ test('scan：只有测试用到的判为 test-only，列出引用它的测试；
   assert.deepEqual(byFile['src/orphan.js'].refs, [{ from: 'src/dead.js', line: 1, via: 'static' }])
 })
 
+test('scan：没合并的分支在用的判为 pending；统计里列出查过、跳过的分支', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.run(['checkout', '-q', '-b', 'feature/x'])
+  repo.write('src/new.js', "import './dead.js'\n")
+  repo.commit('feature')
+  repo.run(['checkout', '-q', '-b', 'archive/y', 'main'])
+  repo.write('src/other.js', "import './helper.js'\n")
+  repo.commit('archive')
+  repo.run(['checkout', '-q', 'main'])
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/helper.js'] })
+  const config = resolveConfig({ entries: ['src/main.js'], branches: { ignore: ['archive/**'] } })
+  const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
+
+  const [dead, helper] = r.candidates.files
+  assert.equal(dead.status, 'pending')
+  assert.match(dead.evidence.map((e) => e.detail).join(), /feature\/x.*src\/new\.js:1 引用了它/)
+  assert.equal(helper.status, 'dead')
+  assert.deepEqual(r.summary.branches.checked.map((b) => b.name), ['feature/x'])
+  assert.deepEqual(r.summary.branches.skipped, [{ name: 'archive/y', reason: '配置里排除' }])
+  assert.equal(r.summary.branches.byBranch.length, 1)
+  assert.equal(r.summary.branches.byBranch[0].branch, 'feature/x')
+  assert.deepEqual(r.summary.branches.byBranch[0].files, ['src/dead.js'])
+})
+
 test('scan：生成的候选清单能通过 history 的校验', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()

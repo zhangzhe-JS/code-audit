@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：374 个，全部通过（`npm test`）
+- 测试：388 个，全部通过（`npm test`）
 
 ---
 
@@ -15,9 +15,9 @@
 | M1 | history 模块：引入、引用时间线、失去引用 | ✅ 完成（d4a518a） |
 | M2 | report：从 JSON 生成 Markdown 报告、文件头注释 | ✅ 完成（06c07de） |
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
-| M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批完成（306951b～3df184c）；第二批 pending、internal 放到 M5 之后 |
-| M5 | verify：临时目录实删，和构建 / 测试基线对比 | 🚧 进行中：① 试跑基线（fe163a1）、② 删除对比 + 定位（待提交） |
-| M6 | 接入第二个项目（Vue3 + TS） | ⏳ 未开始 |
+| M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批（306951b～3df184c）；第二批 pending 完成；internal 随导出维度一起做 |
+| M5 | verify：临时目录实删，和构建 / 测试基线对比 | ✅ ① 试跑基线（fe163a1）、② 删除对比 + 定位（3a34279） |
+| M6 | 接入第二个项目（Vue3 + TS） | ✅ findip-portal-web 全流程跑通（待提交） |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
 
 ---
@@ -184,7 +184,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | ④ | `test-only` | 用 scan 的 knip 证据，列出直接引用它的测试 | ✅ 完成（待提交） |
 | ⑤ | `dead-only-ref` | 候选之间的引用关系，顺着引用传递要保留的状态 | ✅ 完成（待提交） |
 | ⑥ | `dead` | 以上都不是；每个 dead 都写明原因 | ✅ 3df184c |
-| 后续 | `pending` / `internal` | 未合并分支 / 导出维度 | ⏳ |
+| 第二批 | `pending` | 没合并的分支改过的文件 import 了它，或者分支改了它本身 | ✅ 完成（待提交） |
+| 以后 | `internal` | 文件里的导出被同文件调用：属于导出维度，等做导出维度时一起做 | ⏳ |
 
 ### 公共部分
 
@@ -268,6 +269,21 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   人工隔离过的 13 个全部判为 dead 或 dead-only-ref，和人工结论一致
 - [x] 反向检查：逐个撤掉 9 处关键逻辑，每处都有测试失败
 
+### 第二批：pending（其他分支在用）
+
+- [x] `src/collect/branch-refs.js`：没合并进分析提交的分支（本地 + 远程跟踪分支，只读本地已有的，不 fetch）
+  - 只看分支自己改过的文件（从分叉点到分支最新提交）：分支没动过的文件，合并后用的是当前分支的版本，不会把引用带回来
+  - 分支改过 / 新增的源码文件 import 了候选 → pending；分支改了候选本身 → pending（还有人在改，现在删合并会冲突）；分支删了它不算
+  - 同一个提交的多个分支名（本地和 origin/ 同名）合成一个；origin/HEAD 这种指向别的分支的名字跳过
+- [x] 配置 `branches: { ignore, maxAgeDays }`：**由用户自己配置，不配置就全部查**（宁可多判）；不会再合回来的老版本线可以按名字（glob）排除，或按「多少天没提交」跳过
+- [x] scan 输出里列出每个分支导致了几个 pending，并提示怎么排除，方便用户决定
+- [x] `src/rules/pending.js`：证据写明分支、最后提交日期、哪个文件哪一行；顺着引用传递，被它引用的候选跟着保留
+- [x] finicr-web：5 秒查完 9 个没合并的分支，多出 12 个 pending。其中 10 个原来是 dead（verify 也说删了没问题），
+  但 master、hotfix、guangfa 分支上改过的文件还在用它们（如 `src/api/document.js` 被 `LongPromptConversation.vue` 引用）。
+  直接删的话，这些分支合回来时构建会报错——verify 只看当前分支，看不出来
+  - 分布变为：dead 34、pending 12、dead-only-ref 6、test-only 2、dormant 2、external 2
+- [x] 反向检查：逐个撤掉 8 处关键逻辑，每处都有测试失败（「不从分叉点算」一开始没抓到，补了「主线后来去掉引用」的场景）
+
 ### ③ 时发现并修复：没声明 vue 依赖时 knip 跳过 .vue 文件
 
 - knip 只在 package.json 声明了 vue（svelte、astro 同理）时才解析 .vue，否则悄悄跳过，插件列表里照样显示 Vue，核对插件看不出来
@@ -288,8 +304,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | 顺序 | 内容 | 状态 |
 |---|---|---|
 | ① | 工作目录（导出代码、克隆依赖）、跑命令、试跑基线 | ✅ fe163a1 |
-| ② | 删掉候选后跑、和基线比较；先从报错里认出文件，认不出再对半找；结果写进 verify 字段 | ✅ 完成（待提交） |
-| ③ | finicr-web 实测，根据结果调整；报告里突出验证结果 | ⏳ |
+| ② | 删掉候选后跑、和基线比较；先从报错里认出文件，认不出再对半找；结果写进 verify 字段 | ✅ 3a34279 |
+| ③ | finicr-web 实测，根据结果调整 | ✅ 一次全部通过，暂时没有要调整的；等 M6 第二个项目再看 |
 
 ### 决定
 
@@ -337,6 +353,43 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   构建通过、没有新增警告、没有新增失败的测试（基线本来失败的 10 个不变）；目标项目 `git status` 不变、临时目录没有残留。
   报告里 51 个显示「删除后与基线一致」，其余 7 个（external、dormant、test-only）不验证
 
+## M6 接入第二个项目 ✅
+
+findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用 unplugin-vue-components 自动注册组件。
+配置只写了入口、别名、构建命令（本机 profile，不入库）：
+
+```js
+{ entries: ['src/main.ts'], aliases: { '@': 'src' }, verify: { build: 'pnpm run build:ci' } }
+```
+
+### 发现并修复：Vue 全局注册的组件
+
+- 现象：第一次 scan 只找出 3 个候选。`KatexRender`、`BasicModal` 全项目没人用，却没被找出来
+- 原因：tsconfig 把 `src/components.d.ts`（unplugin-vue-components 生成的声明文件）列为源文件，
+  knip 把里面的 `typeof import('./components/X/index.vue')` 当成引用：登记过的组件一律算在用。
+  对照实验：不导出声明文件，或者不导出 tsconfig.json，结果都变成 8 个
+- 只拿掉声明文件也不对：`BasicSearch` 等组件只在模板里写标签（`<BasicSearch>`），knip 看不到，会被误报为没人用
+- 修复（`src/collect/global-components.js`，通用：只认 Vue 的 `interface GlobalComponents` 声明）：
+  - 读出声明文件里登记的本地组件（第三方组件、提交里不存在的不算）
+  - scan 的临时目录里不放声明文件
+  - 在各 .vue 的模板里找标签（大驼峰、短横线写法），在临时目录的拷贝里给用到的文件补 import（插在 `<script>` 那一行，行号不变），knip 顺着真实的引用关系走
+  - 候选之间的标签用法也算引用（只被没人用的页面用到的组件判 dead-only-ref）；测试文件里的标签算测试引用
+- 结果：候选 5 个（dead 4、pending 1）：`BasicModal`、`KatexRender`、`GuideSteps`、`refreshToken.ts`，grep 交叉核对全部没人用；
+  `src/api/auth.ts` 被 `origin/dev_2.6.0.guangfa` 分支改过、还在用，判 pending
+- 声明文件里登记了 16 个组件，9 个是按模板标签用的
+
+### 发现并修复：history 把 .d.ts 算成引用方
+
+- 现象：`KatexRender` 的历史显示「仍被引用」，引用方是 `src/components.d.ts`
+- 修复：history 找引用方时排除 `*.d.ts`：类型声明构建后不存在，里面的路径不是运行时的使用
+
+### 全流程结果
+
+- scan 2 秒、history 1 秒、report 生成 5 个头注释
+- verify（build: `pnpm run build:ci`，含 lint 和 TS 编译；没有测试命令）：4 个 dead 一次全删，和基线一致，用时 1 分钟
+- 目标项目 `git status` 不变，临时目录没有残留
+- 注意：全局注册的组件删错了，构建不会报错（Vue 运行时才警告），verify 兜不住，只能靠 scan 认准标签用法
+
 ## 已知问题
 
 修好一个就划掉，并写上提交号。
@@ -358,6 +411,10 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | external：省略扩展名的路径同时也是目录名时（`'src/i18n/menu'` 指目录），也算引用了 `src/i18n/menu.js` | 多一条证据 | 低。模块解析本来也是文件优先 |
 | dormant：`.vue` 模板里注释掉的组件标签（`<!-- <Tip /> -->`）不认，只认注释掉的 import | 只注释了标签、没注释 import 时漏判 | 低。组件仍被 import，不会是候选 |
 | dormant：yml 的 `#` 注释不搜 | 可能漏判 | 低 |
+| pending：hotfix 用 cherry-pick 合回主线时，git 仍认为分支没合并，已经摘过来的改动也会判 pending | 多判 pending | 低。不会误删；不会再合回来的分支在 branches.ignore 里排除 |
+| pending：远程分支以上次 fetch 为准，scan 不 fetch | 别人新推的分支看不到 | 中。scan 前自己 fetch 一下 |
+| 全局注册的组件只认声明文件里登记了的：自动注册但关掉了声明文件（dts: false）、手写全局注册又没写声明的，模板里的用法看不到 | 在用的组件会被当成没人用；构建不会报错（运行时才警告），verify 也发现不了 | 中。这种项目要把组件目录写进 entries 或 scanIgnore |
+| 自动导入（unplugin-auto-import）的本地目录（dirs）：不 import 就能用的本地函数看不到 | 同上 | 中。目前遇到的项目只自动导入第三方库，不受影响 |
 | verify：命令输出超过 2 MB 时只保留末尾，日志缺少开头部分（但 baseline 注释称完整输出） | 早期诊断信息丢失，排查构建 / 测试失败不完整 | 低。仅影响诊断记录，不影响退出码判断 |
 | verify：基线测试已有可识别失败时，删文件后若测试因未识别错误退出、但仍打印原有失败行，比较逻辑只看新增失败用例而不看新的非零退出码 | 可能把实际已坏的删除组合误判为通过 | 中。需要同时比较退出状态和已识别失败用例 |
 

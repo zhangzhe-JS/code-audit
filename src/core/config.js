@@ -45,6 +45,13 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  *                                   不会加载本地源码的动态加载（如加载 CDN 上的脚本）。
  *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法，reason 写确认的理由（会写进报告）
  * @property {VerifyConfig} verify    verify 用：在临时目录里跑的命令。没有默认值：各项目不同，猜错了就是乱跑
+ * @property {BranchesConfig} branches scan 用：判断「其他分支在用」时查哪些没合并的分支
+ */
+
+/**
+ * @typedef {object} BranchesConfig
+ * @property {string[]} ignore        不查的分支（glob，* 不跨 /，** 跨 /），如 "origin/release/**"、不会再合回来的老版本线
+ * @property {number|null} maxAgeDays 最后提交早于分析的提交多少天的分支不查；null = 都查
  */
 
 /**
@@ -97,7 +104,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 动态加载默认都不放过：人工确认过的才写进来
   reviewedDynamicLoads: Object.freeze([]),
   // verify 的命令没有默认值；超时默认 30 分钟（构建前还可能跑 lint）
-  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 })
+  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 }),
+  // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
+  branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null })
 })
 
 /**
@@ -211,6 +220,15 @@ export function resolveConfig(overrides = {}) {
     errors.push(`verify.timeoutSeconds 必须是不小于 10 的整数（秒）：${config.verify.timeoutSeconds}`)
   }
 
+  for (const k of Object.keys(config.branches)) {
+    if (!['ignore', 'maxAgeDays'].includes(k)) errors.push(`branches 里不认识的字段：${k}（可用的字段：ignore、maxAgeDays）`)
+  }
+  if (!Array.isArray(config.branches.ignore) || !config.branches.ignore.every((g) => typeof g === 'string' && g.trim() !== '')) {
+    errors.push('branches.ignore 必须是分支名或 glob 组成的数组，如 ["origin/release/**"]')
+  }
+  const age = config.branches.maxAgeDays
+  if (age !== null && (!Number.isInteger(age) || age < 1)) errors.push(`branches.maxAgeDays 必须是正整数（天）或 null：${age}`)
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -227,7 +245,8 @@ export function resolveConfig(overrides = {}) {
     aliases: Object.freeze({ ...config.aliases }),
     scanIgnore: Object.freeze([...config.scanIgnore]),
     reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r }))),
-    verify: Object.freeze({ ...config.verify })
+    verify: Object.freeze({ ...config.verify }),
+    branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) })
   })
 }
 
@@ -248,7 +267,7 @@ export function isValidHashLength(n) {
 }
 
 /** 按键合并的配置项 */
-const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify'])
+const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify', 'branches'])
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v)

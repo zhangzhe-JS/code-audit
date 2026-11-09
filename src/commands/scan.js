@@ -105,6 +105,18 @@ function printSummary(s) {
     console.error(`  import.meta.glob 换算成入口 ${s.globs.length} 处：`)
     for (const g of s.globs) console.error(`    - ${g.from}:${g.line}  ${g.pattern} → ${g.resolved}`)
   }
+  if (s.branches.checked.length > 0 || s.branches.skipped.length > 0) {
+    console.error(`  没合并的分支：查了 ${s.branches.checked.length} 个` + (s.branches.skipped.length > 0 ? `，按配置跳过 ${s.branches.skipped.length} 个` : '') + '（只读本地已有的分支，不 fetch）')
+  }
+  if (s.branches.byBranch.length > 0) {
+    console.error('  这些分支还在用部分候选，相关文件判为 pending：')
+    for (const b of s.branches.byBranch) console.error(`    - ${b.branch}（最后提交 ${b.date}）：${b.files.length} 个文件`)
+    console.error("  分支不会再合回来的话，可以在 profile 里排除，如 branches: { ignore: ['分支名'] } 或 { maxAgeDays: 90 }；不配置就全部查")
+  }
+  if (s.globalComponents.declarations.length > 0) {
+    const g = s.globalComponents
+    console.error(`  全局注册的组件：${g.declarations.join('、')} 里登记了 ${g.components} 个，其中 ${g.used} 个在模板里用到（按标签认，补成引用交给 knip）`)
+  }
   if (s.addedDeps.length > 0) {
     console.error(`  package.json 没有声明 ${s.addedDeps.join('、')}：只在临时目录里补上，否则 knip 会跳过对应的单文件组件`)
   }

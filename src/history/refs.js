@@ -18,10 +18,12 @@ function escapeRegex(s) {
 /**
  * 把扩展名列表转成 git 的路径匹配写法，限定只在源码文件里找引用方
  * README、构建产物、翻译 json、sourcemap 等文件里也会出现路径字符串，但不是引用
- * 例：['.js', '.vue'] → ['*.js', '*.vue']
+ * 类型声明文件（.d.ts）也排除：构建后不存在，里面的路径只是类型引用，不是运行时的使用
+ *   （如 unplugin-vue-components 生成的 components.d.ts 登记了所有组件，算进来的话组件永远「仍被引用」）
+ * 例：['.js', '.ts'] → ['*.js', '*.ts', ':(exclude)*.d.ts']
  */
 export function toGlobs(extensions) {
-  return extensions.map((ext) => `*${ext}`)
+  return [...extensions.map((ext) => `*${ext}`), ':(exclude)*.d.ts']
 }
 
 /**

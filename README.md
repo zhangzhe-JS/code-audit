@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做。verify 进行中：已能在临时目录里删掉候选、和基线比较。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）：除「文件内部在用」（`internal`，属于导出维度）外，8 种状态都能判出并写明原因。M5（verify）：能在临时目录里删掉候选、和基线比较。进度见 `docs/progress.md`。
 
 ---
 
@@ -157,7 +157,15 @@ knip 不分析的文件（构建配置、脚本、index.html、package.json，�
 
 在用的代码、配置文件的注释里有引号括起来的路径（如 `// import { check } from '@/utils/check.js'`），判为 `dormant`：以前用过、以后可能恢复，要留在原位。没人用的文件里的注释不算。
 
+没合并的分支在用的判为 `pending`：分支自己改过的文件 import 了它，或者分支改了它本身（只读本地已有的分支，scan 前可以自己 fetch 一下）。不会再合回来的老版本线可以排除：
+
+```js
+branches: { ignore: ['origin/release/**'], maxAgeDays: 180 }  // 默认都查
+```
+
 只有测试用到的判为 `test-only`，列出引用它的测试。候选之间的 import 会顺着传递：被要保留的文件（如 external）引用的，跟着保留；只被同样没人用的文件引用的，判为 `dead-only-ref`，跟着引用方一起处理。
+
+Vue 全局注册的组件（unplugin-vue-components 生成的 `components.d.ts` 等，里面有 `interface GlobalComponents`）：模板里写标签就能用，不用 import。scan 读出登记的组件，按模板里的标签（`<BasicTable>`、`<basic-table>`）认出用法，交给 knip；声明文件本身不算引用。
 
 源码里有 `.vue` 而 package.json 没声明 vue 时（monorepo、没有 package.json），knip 会跳过 .vue 文件。scan 只在临时目录里补上依赖声明，输出里会提示。
 

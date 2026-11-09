@@ -230,3 +230,19 @@ test('git raw：输出原样返回，以空格开头的文件名不会被去掉�
   assert.deepEqual(git(repo.root, ['ls-files', '-z'], { raw: true }).split('\0').filter(Boolean), [' a.js'])
   assert.equal(git(repo.root, ['ls-files']), 'a.js') // 默认去掉首尾空白
 })
+
+test('refsAt / buildTimeline：类型声明文件（.d.ts）不算引用方', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/components/Kx.vue', '<template><i /></template>\n')
+  repo.write('src/App.vue', "<script>\nimport Kx from './components/Kx.vue'\n</script>\n")
+  repo.write('src/components.d.ts', "export interface GlobalComponents { Kx: typeof import('./components/Kx.vue')['default'] }\n")
+  repo.commit('add', { date: '2024-01-01' })
+  repo.write('src/App.vue', '<script>\n</script>\n')
+  const lost = repo.commit('drop', { date: '2024-02-01' })
+
+  assert.deepEqual([...refsAt(repo.root, 'HEAD', 'components/Kx', new Set(), ['.vue', '.ts'])], [])
+  const timeline = buildTimeline(repo.root, 'components/Kx', { exclude: ['src/components/Kx.vue'], extensions: ['.vue', '.ts'] })
+  assert.deepEqual(timeline.map((e) => [e.change, e.from]), [['add', 'src/App.vue'], ['remove', 'src/App.vue']])
+  assert.equal(findLostRef(timeline).hash, lost)
+})

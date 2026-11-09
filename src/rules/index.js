@@ -2,7 +2,7 @@
  * 规则层：给每个「从入口走不到」的候选判定状态
  *
  * 分两步：
- * 1. 逐个文件跑规则（动态加载、图外使用、注释停用、只有测试用到），命中的给出状态、证据、引用
+ * 1. 逐个文件跑规则（动态加载、图外使用、其他分支在用、注释停用、只有测试用到），命中的给出状态、证据、引用
  * 2. 顺着候选之间的 import 传递（graph.js）：
  *    - 引用方要保留（比如是 external），被它引用的也要保留，状态跟引用方一样
  *    - 引用方全都没人用，判为 dead-only-ref：跟着引用方一起处理
@@ -16,16 +16,17 @@ import { dynamicLoadRule } from './dynamic-load.js'
 import { externalRule } from './external.js'
 import { dormantRule } from './dormant.js'
 import { testOnlyRule } from './test-only.js'
+import { pendingRule } from './pending.js'
 import { best, propagate } from './graph.js'
 import { inScope } from '../collect/dynamic-imports.js'
 
 /** 逐个文件跑的规则；顺序只影响证据的先后，状态按 STATUSES 取 */
-const RULES = [dynamicLoadRule, externalRule, dormantRule, testOnlyRule]
+const RULES = [dynamicLoadRule, externalRule, pendingRule, dormantRule, testOnlyRule]
 
 /** dead 的证据：排除了哪些情况 */
 export const NO_REF = Object.freeze({
   rule: 'no-ref',
-  detail: '没有命中任何需要保留的情况（动态加载、构建配置等图外使用、注释掉的引用、测试引用），也没有被其他候选引用'
+  detail: '没有命中任何需要保留的情况（动态加载、构建配置等图外使用、没合并的分支、注释掉的引用、测试引用），也没有被其他候选引用'
 })
 
 /**
@@ -34,6 +35,7 @@ export const NO_REF = Object.freeze({
  * @property {Map<string, import('../collect/external-refs.js').ExternalRef[]>} externalRefs  knip 不分析的文件里写着候选路径的地方
  * @property {Map<string, import('../collect/comment-refs.js').CommentRef[]>} commentRefs  在用的文件里注释掉的引用
  * @property {Map<string, import('../collect/path-refs.js').ImportRef[]>} testRefs  测试文件里的 import
+ * @property {Map<string, import('../collect/branch-refs.js').BranchRef[]>} branchRefs  没合并的分支里的引用
  * @property {Map<string, string>} knipRules  候选 → knip 证据的规则名
  * @property {Set<string>} candidates  所有候选文件
  */
@@ -53,6 +55,7 @@ export const NO_REF = Object.freeze({
  * @param {RuleContext['externalRefs']} [opts.externalRefs]
  * @param {RuleContext['commentRefs']} [opts.commentRefs]
  * @param {RuleContext['testRefs']} [opts.testRefs]
+ * @param {RuleContext['branchRefs']} [opts.branchRefs]
  * @param {Map<string, import('../collect/path-refs.js').ImportRef[]>} [opts.importers]  候选 → 引用它的候选
  * @param {((file: string, ctx: RuleContext) => RuleHit | null)[]} [opts.rules] 测试时可以替换
  * @returns {{file: string, status: string, evidence: object[], refs: object[]}[]}
@@ -64,6 +67,7 @@ export function judge({
   externalRefs = new Map(),
   commentRefs = new Map(),
   testRefs = new Map(),
+  branchRefs = new Map(),
   importers = new Map(),
   rules = RULES
 }) {
@@ -72,6 +76,7 @@ export function judge({
     externalRefs,
     commentRefs,
     testRefs,
+    branchRefs,
     knipRules: new Map(files.map((f) => [f.file, f.evidence[0]?.rule])),
     candidates: new Set(files.map((f) => f.file))
   }

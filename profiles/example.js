@@ -46,5 +46,11 @@ export default {
 
   // 人工确认过、不会加载本地源码的动态加载（路径开头就是变量时，scan 会把范围内的候选都判 unknown）
   // from、expr 照抄 scan 输出里的警告；reason 必填，会写进报告
-  reviewedDynamicLoads: [{ from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' }]
+  reviewedDynamicLoads: [{ from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' }],
+
+  // 判断「其他分支在用」时查哪些没合并的分支。默认都查；不会再合回来的老版本线可以排除
+  branches: { ignore: ['origin/release/**'], maxAgeDays: 180 },
+
+  // verify 在临时目录里跑的命令（没有默认值），必须能无人值守跑完
+  verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800 }
 }
