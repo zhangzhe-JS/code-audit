@@ -79,8 +79,20 @@ export function globTailRegex(pattern) {
   const parts = pattern.replace(/^\.\.?\//, '').split('/')
   // 第一段不含通配符、又不像目录名（~、@、# 开头的别名）时去掉
   if (parts.length > 1 && /^[~@#$]/.test(parts[0]) && !/[*?{[]/.test(parts[0])) parts.shift()
+  return new RegExp(`(?:^|/)${globBody(parts.join('/'))}$`)
+}
+
+/**
+ * 相对仓库根目录的 glob（GlobImport.resolved）转成整条路径匹配的正则
+ * 支持 *、**、?、{a,b}、(a|b)（Vite 的 glob 写法）
+ * @returns {RegExp}
+ */
+export function globToRegExp(glob) {
+  return new RegExp(`^${globBody(glob)}$`)
+}
+
+function globBody(body) {
   let re = ''
-  const body = parts.join('/')
   for (let i = 0; i < body.length; i++) {
     const c = body[i]
     if (c === '*' && body[i + 1] === '*') {
@@ -88,13 +100,17 @@ export function globTailRegex(pattern) {
       i += body[i + 2] === '/' ? 2 : 1
     } else if (c === '*') re += '[^/]*'
     else if (c === '?') re += '[^/]'
-    else if (c === '{') {
-      const close = body.indexOf('}', i)
-      re += `(?:${body.slice(i + 1, close).split(',').map(escapeRe).join('|')})`
+    else if (c === '{' || c === '(') {
+      const close = body.indexOf(c === '{' ? '}' : ')', i)
+      if (close < 0) {
+        re += escapeRe(c)
+        continue
+      }
+      re += `(?:${body.slice(i + 1, close).split(c === '{' ? ',' : '|').map(escapeRe).join('|')})`
       i = close
     } else re += escapeRe(c)
   }
-  return new RegExp(`(?:^|/)${re}$`)
+  return re
 }
 
 function escapeRe(s) {

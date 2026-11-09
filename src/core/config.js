@@ -51,8 +51,12 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
 
 /**
  * @typedef {object} QuarantineConfig
- * @property {string|null} dir   隔离区目录，相对仓库根目录；null = 第一个源码目录下的 _deprecated（如 src/_deprecated）
- * @property {string|null} base  文件按相对 base 的路径放进隔离区（子目录结构不变）；null = 第一个源码目录。
+ * @property {'nearby'|'central'} layout 隔离区怎么放
+ *   nearby（默认）：就近，放进文件所在目录下的 <dirName>：src/a/b.js → src/a/<dirName>/b.js
+ *   central：集中放进一个目录（dir），子目录结构不变
+ * @property {string} dirName  隔离目录的名字，默认 _deprecated。路径里有一段叫这个名字的文件都算已经隔离过
+ * @property {string|null} dir   central 用：隔离区目录；null = 第一个源码目录下的 <dirName>（如 src/_deprecated）
+ * @property {string|null} base  central 用：文件按相对 base 的路径放进 dir；null = 第一个源码目录。
  *   例：dir 'src/utils/_deprecated'、base 'src/utils'：src/utils/canvas/Rect.js → src/utils/_deprecated/canvas/Rect.js
  *   不在 base 下的文件不隔离
  */
@@ -116,8 +120,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 }),
   // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
   branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null }),
-  // 隔离区：不写就是第一个源码目录下的 _deprecated
-  quarantine: Object.freeze({ dir: null, base: null })
+  // 隔离区：默认就近，放进文件所在目录下的 _deprecated
+  quarantine: Object.freeze({ layout: 'nearby', dirName: '_deprecated', dir: null, base: null })
 })
 
 /**
@@ -241,7 +245,14 @@ export function resolveConfig(overrides = {}) {
   if (age !== null && (!Number.isInteger(age) || age < 1)) errors.push(`branches.maxAgeDays 必须是正整数（天）或 null：${age}`)
 
   for (const k of Object.keys(config.quarantine)) {
-    if (!['dir', 'base'].includes(k)) errors.push(`quarantine 里不认识的字段：${k}（可用的字段：dir、base）`)
+    if (!['layout', 'dirName', 'dir', 'base'].includes(k)) errors.push(`quarantine 里不认识的字段：${k}（可用的字段：layout、dirName、dir、base）`)
+  }
+  if (!['nearby', 'central'].includes(config.quarantine.layout)) errors.push(`quarantine.layout 只能是 nearby（就近）或 central（集中）：${config.quarantine.layout}`)
+  if (typeof config.quarantine.dirName !== 'string' || !/^[\w.-]+$/.test(config.quarantine.dirName) || /^\.+$/.test(config.quarantine.dirName)) {
+    errors.push(`quarantine.dirName 必须是一个目录名（不含 /），如 "_deprecated"：${config.quarantine.dirName}`)
+  }
+  if (config.quarantine.layout === 'nearby' && (config.quarantine.dir !== null || config.quarantine.base !== null)) {
+    errors.push('quarantine.dir、base 只用于 layout: "central"；就近隔离（nearby）不用写')
   }
   for (const k of ['dir', 'base']) {
     const v = config.quarantine[k]

@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：422 个，全部通过（`npm test`）
+- 测试：429 个，全部通过（`npm test`）
 
 ---
 
@@ -394,10 +394,16 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 唯一会改动目标项目的命令。默认只打印计划，加 `--apply` 才执行。
 
+**约定：测试用的项目（finicr-web、findip-portal-web）只打印计划，不执行 `--apply`、不在里面建分支。**
+`--apply` 的执行、提交、撤回只在测试里临时建的仓库上验证。
+
 决定（2026-11-09 和用户确认）：
-- 执行时新建分支，分两次提交：第一次只 `git mv`（git 认得出改名，历史接得上），第二次加头注释、改路径、更新清单。不 push
+- ~~执行时新建分支，分两次提交~~ → **不建分支、不提交，只在工作区里做好隔离，提交交给开发人员**（2026-11-09 用户决定）：
+  移动用 `git mv`（改名已暂存，git 认得出），头注释、路径、README 只改文件不暂存；最后列出改了什么。
+  建议开发人员先提交暂存好的改名、再提交其余改动（一起提交的话小文件可能被当成删了再新建）
 - 只隔离 dead / dead-only-ref 并且实删验证通过的；没跑 verify 的不隔离
-- 隔离区可配置 `quarantine: { dir, base }`，默认 `<第一个源码目录>/_deprecated`；文件按相对 base 的路径放进去，子目录结构不变
+- ~~隔离区默认集中放在 `<第一个源码目录>/_deprecated`~~ → 改为**就近隔离**（2026-11-09 用户决定）：放进文件所在目录下的 `_deprecated`
+  （`src/components/echarts/EchartsCom.vue` → `src/components/echarts/_deprecated/EchartsCom.vue`）。集中隔离保留为 `layout: 'central'`
 - lint 等工具配置不自动改，计划里列出要手动加的那一行
 
 实现：
@@ -407,16 +413,26 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 - [x] `src/quarantine/rewrite.js`：被移走的文件里的相对路径（import / require / 样式 @import、url() / 模板 src、href）
   - 优先改成别名（`../api/x` → `@/api/x`）：别名不随位置变，移回原路径也不用再改
   - 没有别名时按新位置算相对路径；指向同一批移走的按它们的新位置；注释行、找不到的不改
-- [x] `src/quarantine/apply.js`：新建分支、两次提交；README 已有的原样保留，在最后追加这一批（表格：新路径、原路径、状态、引入、失去引用）
-  - git 钩子照常执行；任何一步出错（包括钩子没通过）整体撤回：reset 到开始的提交、切回原分支、删掉新分支
-- [x] `code-audit quarantine --root --profile --in [--apply] [--branch] [--moved-at]`：
-  执行前检查工作区干净、HEAD 就是分析的提交（中间有新提交要重新分析）、新分支名没被占用
-- [x] 测试：临时仓库里跑完整流程，检查第一次提交全是 R100（纯改名）、`git log --follow` 接得上；钩子失败时整体撤回
+- [x] `src/quarantine/apply.js`：只改工作区，不建分支、不提交；README 已有的原样保留，在最后追加这一批（表格：新路径、原路径、状态、引入、失去引用）
+  - 任何一步出错整体撤回：已跟踪的文件和暂存区回到 HEAD（执行前要求工作区干净），删掉这次新建的 README 和空目录
+- [x] `code-audit quarantine --root --profile --in [--apply] [--moved-at]`：
+  执行前检查工作区干净、HEAD 就是分析的提交（中间有新提交要重新分析）；执行后列出移动、改路径、头注释、README
+- [x] 测试：临时仓库里跑完整流程，检查 HEAD、分支不变，暂存区全是 R100（纯改名），其余改动未暂存；按建议分两次提交后 `git log --follow` 接得上；
+  移动时出错、写 README 时出错都整体撤回（工作区、暂存区干净，新建的 README 和目录删掉）
 - [x] 反向检查：逐个撤掉 12 处关键逻辑，每处都有测试失败
+- [x] 就近隔离（`quarantine: { layout: 'nearby', dirName: '_deprecated' }`，默认）
+  - 评估：和团队现有习惯一致（`src/utils/_deprecated` 就是「目录 + _deprecated」），恢复只要往上挪一层，lint / tsconfig 一条 `**/_deprecated/**` 全覆盖；
+    代价是目录分散（finicr-web 27 个文件分在 18 个目录）
+  - **风险及处理**：挪进子目录后可能被批量加载重新圈到（实验：`views/a/_deprecated/Old.vue` 会被 `import.meta.glob('../views/**/*.vue')` 圈到，
+    `store/modules/_deprecated/old.js` 会被 `require.context('./modules', true, /\.js$/)` 圈到——已隔离的页面又被注册成路由、打包进去）。
+    `src/quarantine/recapture.js`：对每个新位置查 import.meta.glob（含换算不了的）、拼接路径的 import / require、require.context，会被圈到的不移、写明是哪一处；人工确认过的动态加载不算
+  - README 每个隔离目录一份；`glob-imports.js` 新增 `globToRegExp`（支持 `**`、`{a,b}`、`(a|b)`）
+  - 反向检查：逐个撤掉 6 处关键逻辑，每处都有测试失败（「不认 (a|b)」一开始没抓到，补了测试）
 - [x] finicr-web 试跑（只打印计划，不 --apply）：重新 scan → history → verify，40 个 dead / dead-only-ref 一次实删通过
   - **发现并修复**：人工隔离区 `src/utils/_deprecated/` 里的 13 个文件，被计划再移进默认隔离区，变成 `src/_deprecated/utils/_deprecated/…`（隔离区套隔离区）。
     现在路径里有一段和隔离区目录同名的（如 `_deprecated`）都算已经隔离，不再移
-  - 默认隔离区 `src/_deprecated`：隔离 27 个，改 12 处相对路径（都改成 `@/…`）；沿用现有的 `src/utils/_deprecated`（base `src/utils`）：0 个——剩下的 27 个都不在 utils 下
+  - 集中隔离 `src/_deprecated`：隔离 27 个，改 12 处相对路径（都改成 `@/…`）；沿用现有的 `src/utils/_deprecated`（base `src/utils`）：0 个——剩下的 27 个都不在 utils 下
+  - 就近隔离（默认）：隔离 27 个，分在 18 个 `_deprecated` 目录（各一份 README），改 12 处相对路径；没有会被重新加载的
   - 目标项目的提交、分支、工作区都没变
 
 ## 盲区兜底

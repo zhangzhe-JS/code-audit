@@ -105,3 +105,14 @@ test('scriptOnly：.astro 开头 --- 之间的代码也保留', () => {
 test('没有 glob 的文件直接跳过', () => {
   assert.deepEqual(find('src/a.js', "import x from './x'"), { globs: [], warnings: [], unresolved: [] })
 })
+
+test('globToRegExp：整条路径匹配，支持 **、*、?、{a,b}、(a|b)', async () => {
+  const { globToRegExp } = await import('../src/collect/glob-imports.js')
+  assert.ok(globToRegExp('src/views/**/*.vue').test('src/views/a/_deprecated/Old.vue'))
+  assert.ok(globToRegExp('src/views/**/*.vue').test('src/views/Old.vue'))
+  assert.ok(!globToRegExp('src/views/*.vue').test('src/views/a/b.vue'))
+  assert.ok(globToRegExp('src/i18n/*/zh-CN.(js|ts)').test('src/i18n/menu/zh-CN.ts'))
+  assert.ok(!globToRegExp('src/i18n/*/zh-CN.(js|ts)').test('src/i18n/menu/zh-CN.vue'))
+  assert.ok(globToRegExp('src/x/*.{js,ts}').test('src/x/a.js'))
+  assert.ok(globToRegExp('src/x/?.js').test('src/x/a.js'))
+})
