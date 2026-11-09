@@ -1,15 +1,15 @@
 /**
  * 批量查询 git 历史：读一份候选清单，逐个文件查历史，组装成符合 schema 的完整数据（Report）
  *
- * 候选清单是人工写的（以后由 scan 生成），所以每一项的状态都是 unknown，
- * 证据写「人工列入候选」：还没有经过规则判定，不替规则下结论
+ * 候选清单可以人工写，也可以由 scan 生成。状态一律是 unknown：还没有经过规则判定，不替规则下结论
+ * 证据：scan 生成的候选自带证据（如「从入口走不到」），原样保留；人工写的没有证据，写「人工列入候选」
  *
  * 任何一个文件查询失败，整批都失败并列出所有错误，不输出缺了几项的半成品
  */
-import { git } from './git.js'
+import { resolveCommit } from './git.js'
 import { traceHistory } from './index.js'
 import { DEFAULT_CONFIG } from '../core/config.js'
-import { SCHEMA_VERSION, validate } from '../core/schema.js'
+import { SCHEMA_VERSION, TAGS, validate } from '../core/schema.js'
 import { TOOL } from '../core/tool.js'
 
 /** 人工列入的候选，在证据里统一写成这条 */
@@ -21,12 +21,15 @@ export const MANUAL_EVIDENCE = Object.freeze({
 /**
  * @typedef {object} Candidates 候选清单
  * @property {string} project      项目名，写进报告标题
+ * @property {string} [rev]        候选清单是按哪个提交分析的（完整提交号，scan 会写）；history 默认查这个提交
  * @property {string[]} [entries]  项目入口，相对仓库根目录；只用于记录，不影响历史查询
- * @property {{file: string, pattern?: string, notes?: string[]}[]} files 要查的文件
+ * @property {{file: string, pattern?: string, notes?: string[], evidence?: {rule: string, detail: string, tag?: string}[]}[]} files
+ *           要查的文件，可以是空数组（scan 没找到候选时）；evidence 由 scan 填，人工写时不用写
  */
 
-const TOP_KEYS = ['project', 'entries', 'files']
-const FILE_KEYS = ['file', 'pattern', 'notes']
+const TOP_KEYS = ['project', 'rev', 'entries', 'files']
+const FILE_KEYS = ['file', 'pattern', 'notes', 'evidence']
+const EVIDENCE_KEYS = ['rule', 'detail', 'tag']
 
 /**
  * 校验候选清单，返回错误列表；空数组表示通过
@@ -41,11 +44,15 @@ export function validateCandidates(data) {
     if (!TOP_KEYS.includes(key)) errors.push(`不认识的字段：${key}（可用的字段：${TOP_KEYS.join('、')}）`)
   }
   if (!isNonEmptyString(data.project)) errors.push('project 必须是非空字符串（项目名）')
+  if (data.rev !== undefined && !(typeof data.rev === 'string' && /^([0-9a-f]{40}|[0-9a-f]{64})$/.test(data.rev))) {
+    errors.push('rev 必须是完整提交号（40 或 64 位小写十六进制）')
+  }
   if (data.entries !== undefined && !(Array.isArray(data.entries) && data.entries.every(isRelativePath))) {
     errors.push('entries 必须是相对路径组成的数组')
   }
-  if (!Array.isArray(data.files) || data.files.length === 0) {
-    errors.push('files 必须是非空数组')
+  // 空数组合法：scan 没找到候选也是一种结果，照样能交给 history、report 走完流程
+  if (!Array.isArray(data.files)) {
+    errors.push('files 必须是数组')
     return errors
   }
 
@@ -67,6 +74,22 @@ export function validateCandidates(data) {
     if (f.notes !== undefined && !(Array.isArray(f.notes) && f.notes.every(isNonEmptyString))) {
       errors.push(`${at}.notes 必须是非空字符串组成的数组`)
     }
+    if (f.evidence !== undefined) {
+      if (!Array.isArray(f.evidence) || f.evidence.length === 0) {
+        errors.push(`${at}.evidence 必须是非空数组；没有证据时不要写这一项`)
+      } else {
+        f.evidence.forEach((ev, j) => {
+          const eat = `${at}.evidence[${j}]`
+          if (!isPlainObject(ev)) return errors.push(`${eat} 必须是对象，如 { "rule": "...", "detail": "..." }`)
+          for (const key of Object.keys(ev)) {
+            if (!EVIDENCE_KEYS.includes(key)) errors.push(`${eat} 不认识的字段：${key}（可用的字段：${EVIDENCE_KEYS.join('、')}）`)
+          }
+          if (!isNonEmptyString(ev.rule)) errors.push(`${eat}.rule 必须是非空字符串`)
+          if (!isNonEmptyString(ev.detail)) errors.push(`${eat}.detail 必须是非空字符串`)
+          if (ev.tag !== undefined && !TAGS.includes(ev.tag)) errors.push(`${eat}.tag 不合法：${ev.tag}`)
+        })
+      }
+    }
   })
   return errors
 }
@@ -76,17 +99,24 @@ export function validateCandidates(data) {
  * @param {object} opts
  * @param {string} opts.root               仓库目录（绝对路径）
  * @param {Candidates} opts.candidates     已经通过 validateCandidates 的候选清单
- * @param {string} [opts.rev]              查到哪个提交为止，默认 HEAD
+ * @param {string} [opts.rev]              查到哪个提交为止；不传时用候选清单里的 rev，清单里也没有就用 HEAD
  * @param {Readonly<import('../core/config.js').Config>} [opts.config]
  * @param {Date} [opts.now]                生成时间，测试时可以固定
  * @returns {import('../core/schema.js').Report}
  */
-export function buildReport({ root, candidates, rev = 'HEAD', config = DEFAULT_CONFIG, now = new Date() }) {
+export function buildReport({ root, candidates, rev, config = DEFAULT_CONFIG, now = new Date() }) {
   const listErrors = validateCandidates(candidates)
   if (listErrors.length > 0) throw new Error(`候选清单有误：\n- ${listErrors.join('\n- ')}`)
 
   // 先把 rev 换成完整提交号：报告里记录的是确切的提交，而不是 HEAD 这种会变的名字
-  const fullRev = resolveCommit(root, rev)
+  // 候选清单记了分析时的提交：历史也查这个提交，两边看到的是同一份代码
+  const fullRev = resolveCommit(root, rev ?? candidates.rev ?? 'HEAD')
+  if (candidates.rev !== undefined && fullRev !== candidates.rev) {
+    throw new Error(
+      `--rev ${rev} 是 ${fullRev}，和候选清单分析的提交 ${candidates.rev} 不一致：` +
+        '两边看到的代码不同，结论会对不上。不传 --rev 即可按候选清单的提交查询；要查别的提交，请对那个提交重新 scan'
+    )
+  }
 
   const items = []
   const failures = []
@@ -99,7 +129,7 @@ export function buildReport({ root, candidates, rev = 'HEAD', config = DEFAULT_C
         kind: 'file',
         target: c.file,
         status: 'unknown',
-        evidence: [{ ...MANUAL_EVIDENCE }],
+        evidence: c.evidence ? c.evidence.map((ev) => ({ ...ev })) : [{ ...MANUAL_EVIDENCE }],
         refs: [],
         history,
         verify: null,
@@ -133,15 +163,6 @@ export function buildReport({ root, candidates, rev = 'HEAD', config = DEFAULT_C
   const errors = validate(report)
   if (errors.length > 0) throw new Error(`生成的数据不符合格式（工具内部错误）：\n- ${errors.join('\n- ')}`)
   return report
-}
-
-/** 把提交名（HEAD、分支名、短提交号）换成完整提交号；不存在时报错 */
-function resolveCommit(root, rev) {
-  try {
-    return git(root, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
-  } catch {
-    throw new Error(`找不到提交：${rev}（仓库：${root}）`)
-  }
 }
 
 function isPlainObject(v) {

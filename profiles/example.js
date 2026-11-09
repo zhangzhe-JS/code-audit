@@ -28,5 +28,19 @@ export default {
   headerStyles: { '.astro': 'html' },
 
   // 状态的显示文案，只需要写要改的；状态 ID 本身不能改
-  statusLabels: { dead: '无引用，可以删除' }
+  statusLabels: { dead: '无引用，可以删除' },
+
+  // ---------- scan 用 ----------
+
+  // 项目入口（必填，没有默认值：猜错会把在用的文件当成没人用）。可以写 glob
+  entries: ['src/main.js'],
+
+  // 测试入口：写了就能区分「只有测试用到」的文件；匹配到的测试文件本身不列为候选
+  testEntries: ['src/**/*.test.js', 'tests/**/*.spec.ts'],
+
+  // 路径别名 → 目录，照抄构建配置里的 resolve.alias（没有默认值：@ 指向哪里各项目不同）
+  aliases: { '@': 'src', '~': 'src' },
+
+  // 不列为候选的文件，比如测试用的 mock、只在构建时用的脚本
+  scanIgnore: ['src/mock/**', 'src/tests/**']
 }

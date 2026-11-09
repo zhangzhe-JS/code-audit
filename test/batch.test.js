@@ -64,7 +64,7 @@ test('候选清单：各种写错的情况都报出来，包括拼错的字段�
     /files\[1\]\.file 重复：a\.js/, /files\[2\]\.file 必须是相对/, /files\[3\] 必须是对象/, /files\[4\]\.pattern/, /files\[4\]\.notes/, /files\[5\]\.file 必须是相对/]) {
     assert.match(msg, re)
   }
-  assert.deepEqual(validateCandidates({ project: 'p', files: [] }), ['files 必须是非空数组'])
+  assert.deepEqual(validateCandidates({ project: 'p', files: 'x' }), ['files 必须是数组'])
   assert.deepEqual(validateCandidates(null), ['候选清单必须是对象'])
 })
 
@@ -230,4 +230,96 @@ test('history 命令：参数混用、候选清单不是合法 JSON 时报错', 
     assert.equal(r.status, 1, args.join(' '))
     assert.match(r.stderr, re, args.join(' '))
   }
+})
+
+test('候选清单：scan 写的证据原样带进结果；人工写的没有证据，用「人工列入候选」', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const scanned = { rule: 'knip-unreachable', detail: '从入口走不到（knip 1.0.0）' }
+  const report = buildReport({
+    root: repo.root,
+    candidates: {
+      project: 'demo',
+      files: [{ file: 'src/utils/math.js', evidence: [scanned] }, { file: 'src/utils/unused.js' }]
+    }
+  })
+  assert.deepEqual(report.items.map((i) => [i.target, i.status, i.evidence]), [
+    ['src/utils/math.js', 'unknown', [scanned]],
+    ['src/utils/unused.js', 'unknown', [MANUAL_EVIDENCE]]
+  ])
+  assert.deepEqual(validate(report), [])
+})
+
+test('候选清单：证据写错时报错', () => {
+  const errs = validateCandidates({
+    project: 'p',
+    files: [
+      { file: 'a.js', evidence: [] },
+      { file: 'b.js', evidence: [{ rule: '', detail: 'x', why: 1 }] },
+      { file: 'c.js', evidence: [{ rule: 'r', detail: 'd', tag: 'nope' }] },
+      { file: 'd.js', evidence: 'x' }
+    ]
+  })
+  assert.equal(errs.length, 5)
+  assert.match(errs.join('\n'), /files\[0\]\.evidence 必须是非空数组/)
+  assert.match(errs.join('\n'), /evidence\[0\] 不认识的字段：why/)
+  assert.match(errs.join('\n'), /evidence\[0\]\.rule 必须是非空字符串/)
+  assert.match(errs.join('\n'), /evidence\[0\]\.tag 不合法：nope/)
+})
+
+// ---------- 空清单、候选清单里的 rev ----------
+
+test('候选清单：files 可以是空数组（scan 没找到候选）', () => {
+  assert.deepEqual(validateCandidates({ project: 'p', files: [] }), [])
+})
+
+test('候选清单：rev 必须是完整提交号', () => {
+  assert.deepEqual(validateCandidates(candidates({ rev: 'a'.repeat(40) })), [])
+  for (const rev of ['HEAD', 'abc1234', 'A'.repeat(40), 1]) {
+    assert.match(validateCandidates(candidates({ rev })).join('\n'), /rev 必须是完整提交号/)
+  }
+})
+
+test('buildReport：空清单生成没有条目的报告，能通过 schema 校验', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const report = buildReport({ root: repo.root, candidates: candidates({ files: [] }) })
+  assert.deepEqual(report.items, [])
+  assert.deepEqual(validate(report), [])
+})
+
+test('buildReport：不传 rev 时查候选清单里的提交，而不是 HEAD', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const first = repo.run(['rev-list', '--max-parents=0', 'HEAD'])
+  const report = buildReport({ root: repo.root, candidates: candidates({ rev: first, files: [{ file: 'src/utils/math.js' }] }) })
+  assert.equal(report.project.rev, first)
+  // 第一个提交时 math 还没被引用过；查 HEAD 的话会查到「首页去掉 math」
+  assert.equal(report.items[0].history.lostRef, null)
+  const atHead = buildReport({ root: repo.root, candidates: candidates({ files: [{ file: 'src/utils/math.js' }] }) })
+  assert.equal(atHead.items[0].history.lostRef.subject, '首页去掉 math')
+  assert.notEqual(first, repo.run(['rev-parse', 'HEAD']))
+})
+
+test('buildReport：传了 rev 又和候选清单的提交不一致时报错；一致时照常', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const head = repo.run(['rev-parse', 'HEAD'])
+  const first = repo.run(['rev-list', '--max-parents=0', 'HEAD'])
+  assert.throws(() => buildReport({ root: repo.root, candidates: candidates({ rev: first }), rev: 'HEAD' }), /和候选清单分析的提交 .* 不一致/)
+  assert.equal(buildReport({ root: repo.root, candidates: candidates({ rev: head }), rev: 'HEAD' }).project.rev, head)
+})
+
+test('空清单能走完 history → report', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const dir = tempDir(t)
+  writeFileSync(join(dir, 'c.json'), JSON.stringify({ project: 'demo', files: [] }))
+
+  const h = cli('history', '--root', repo.root, '--in', join(dir, 'c.json'), '--out', join(dir, 'data.json'))
+  assert.equal(h.status, 0, h.stderr)
+  assert.match(h.stderr, /已查询 0 个文件/)
+  const r = cli('report', '--in', join(dir, 'data.json'), '--out', join(dir, 'out'))
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(readFileSync(join(dir, 'out', 'report.md'), 'utf8'), /## 详情\n\n无/)
 })

@@ -89,3 +89,25 @@ test('按键合并的配置项写成 null、数组、字符串时报错，不悄
     }
   }
 })
+
+test('scan 的配置项：默认为空（入口、别名不猜），并校验', () => {
+  assert.deepEqual(DEFAULT_CONFIG.entries, [])
+  assert.deepEqual(DEFAULT_CONFIG.aliases, {})
+  const c = resolveConfig({
+    entries: ['src/main.js'],
+    testEntries: ['src/**/*.test.js'],
+    aliases: { '@': 'src', comps: 'src/components' },
+    scanIgnore: ['src/mock/**']
+  })
+  assert.deepEqual(c.aliases, { '@': 'src', comps: 'src/components' })
+  assert.ok(Object.isFrozen(c.entries) && Object.isFrozen(c.aliases))
+
+  assert.throws(() => resolveConfig({ entries: '/abs/main.js' }), /entries 必须是/)
+  assert.throws(() => resolveConfig({ entries: ['../x.js'] }), /entries 必须是/)
+  assert.throws(() => resolveConfig({ testEntries: ['!src/a.js'] }), /testEntries 必须是/)
+  assert.throws(() => resolveConfig({ scanIgnore: [1] }), /scanIgnore 必须是/)
+  assert.throws(() => resolveConfig({ aliases: null }), /aliases 必须是对象/)
+  assert.throws(() => resolveConfig({ aliases: { '@/*': 'src' } }), /aliases 的键必须是别名本身/)
+  assert.throws(() => resolveConfig({ aliases: { '@': '../src' } }), /aliases\["@"\] 必须是/)
+  assert.throws(() => resolveConfig({ aliases: { '@': 'src/' } }), /aliases\["@"\] 必须是/)
+})

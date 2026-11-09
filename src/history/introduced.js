@@ -13,7 +13,7 @@
  * - 删除后又重新加入（同一路径有过几段生命）：取最早的那次，因为时间线覆盖的也是整个历史
  */
 import { basename } from 'node:path'
-import { git, COMMIT_FORMAT, parseCommit } from './git.js'
+import { git, COMMIT_FORMAT, parseCommit, plainPath } from './git.js'
 import { stripComments } from '../collect/strip-comments.js'
 
 // 输出里用 \x1e 标记提交行的开头，和文件状态行区分开
@@ -69,6 +69,8 @@ export function traceOrigin(root, file, rev = 'HEAD', moves = 0) {
     }
     const [status, a, b] = line.split('\t')
     if (!status || !commit) continue
+    if (a !== undefined) plainPath(a)
+    if (b !== undefined) plainPath(b)
 
     // 改名：a 是旧路径，同一个文件，继续往前
     if (status.startsWith('R')) {
@@ -117,7 +119,7 @@ function findMovedFrom(root, commit, file) {
     '--no-renames', // 关掉改名检测，让移动显示成「删除 + 新增」
     commit
   ])
-  const same = out.split('\n').filter((p) => p && basename(p).trim() === name)
+  const same = out.split('\n').filter((p) => p && basename(plainPath(p)).trim() === name)
   if (same.length !== 1) return null
 
   const from = same[0]

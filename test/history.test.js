@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createRepo } from './helpers/repo.js'
 import { findIntroduced } from '../src/history/introduced.js'
 import { buildTimeline, findLostRef, refsAt } from '../src/history/refs.js'
+import { git } from '../src/history/git.js'
 
 test('找到文件最初被加入的提交', (t) => {
   const repo = createRepo()
@@ -192,4 +193,40 @@ test('不完整的时间线：findLostRef 抛错，不猜结论', () => {
     ]),
     /重复引入/
   )
+})
+
+test('中文文件名：引用方和目标文件的路径原样处理，不被 git 转义', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/工具/数学.js', 'export const add = 1\n')
+  const introduced = repo.commit('新增', { date: '2024-01-01' })
+  repo.write('src/页面/首页可用.js', "import { add } from '@/工具/数学'\n")
+  const added = repo.commit('引用', { date: '2024-02-01' })
+  repo.write('src/页面/首页可用.js', 'export {}\n')
+  const removed = repo.commit('去掉引用', { date: '2024-03-01' })
+
+  const timeline = buildTimeline(repo.root, '工具/数学', { exclude: 'src/工具/数学.js' })
+  assert.deepEqual(timeline.map((e) => [e.commit.hash, e.change, e.from]), [
+    [added, 'add', 'src/页面/首页可用.js'],
+    [removed, 'remove', 'src/页面/首页可用.js']
+  ])
+  assert.equal(findIntroduced(repo.root, 'src/工具/数学.js').hash, introduced)
+})
+
+test('文件名里有引号时明确报错，不拿转义后的路径去查', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/a.js', 'export const a = 1\n')
+  repo.write('src/say"hi".js', "import '@/a'\n")
+  repo.commit('init')
+  assert.throws(() => buildTimeline(repo.root, 'a', { exclude: 'src/a.js' }), /文件名里有引号、反斜杠或控制字符/)
+})
+
+test('git raw：输出原样返回，以空格开头的文件名不会被去掉空格', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write(' a.js', '')
+  repo.commit('init')
+  assert.deepEqual(git(repo.root, ['ls-files', '-z'], { raw: true }).split('\0').filter(Boolean), [' a.js'])
+  assert.equal(git(repo.root, ['ls-files']), 'a.js') // 默认去掉首尾空白
 })

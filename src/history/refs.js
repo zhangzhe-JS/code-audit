@@ -3,7 +3,7 @@
  *
  * 做法：在每个相关的主线提交上「拍快照」，看当时有哪些文件引用了目标，再和上一次比较
  */
-import { git, COMMIT_FORMAT, parseCommit } from './git.js'
+import { git, COMMIT_FORMAT, parseCommit, plainPath } from './git.js'
 import { stripComments } from '../collect/strip-comments.js'
 import { DEFAULT_CONFIG } from '../core/config.js'
 
@@ -31,7 +31,7 @@ export function toGlobs(extensions) {
  */
 export function historicalPaths(root, file, rev = 'HEAD') {
   const out = git(root, ['log', rev, '--follow', '--name-only', '--format=', '--', file])
-  const paths = new Set(out.split('\n').filter(Boolean))
+  const paths = new Set(out.split('\n').filter(Boolean).map(plainPath))
   paths.add(file)
   return paths
 }
@@ -72,7 +72,9 @@ export function refsAt(root, commit, pattern, exclude, extensions = DEFAULT_CONF
   for (const line of out.split('\n')) {
     // 每行格式：提交号:文件路径
     const file = line.slice(commit.length + 1)
-    if (!file || skip.has(file)) continue
+    if (!file) continue
+    plainPath(file)
+    if (skip.has(file)) continue
 
     // 读出这个提交时的完整文件，去掉注释后再确认
     const code = git(root, ['show', `${commit}:${file}`])

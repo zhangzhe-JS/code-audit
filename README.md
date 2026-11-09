@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，可以用 history + report 生成排查报告和头注释；scan、rules、verify 还没做。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。rules、verify 还没做，所以状态暂时都是 `unknown`。进度见 `docs/progress.md`。
 
 ---
 
@@ -17,7 +17,7 @@
 | **默认只读** | 从项目外部分析，不往目标项目里加任何文件。只有 `quarantine` 命令会改动目标项目，且必须显式执行 |
 | **插件化** | 核心与框架无关。Vue2 / Vue3 / TS / Vite 等差异放在插件里，按项目配置选用 |
 | **数据驱动** | 每一步读写统一格式的 JSON，报告只从 JSON 生成，不手写结论 |
-| **零运行时依赖** | 只使用 Node 内置模块；发布时打包成单文件 tgz，不影响目标项目的依赖 |
+| **核心零依赖** | 核心（数据格式、history、report、规则）只使用 Node 内置模块。采集可以借助外部分析工具：目前 scan 用 knip，作为 code-audit 的可选依赖，安装 code-audit 时自动装上，不装进目标项目。只有 scan 需要它，其他命令没有 knip 也能用 |
 | **不碰目标仓库的共享状态** | 不使用 `git stash`，用完的 worktree 一定清理，从不 `push` |
 | **通用，不针对某个项目** | 目录、别名、扩展名、文案等项目差异一律放进配置（`profiles/`），代码只放通用逻辑和常见约定的默认值。代码和注释里不写具体项目的名称和路径；具体项目只出现在本机的 `profiles/`、`test/golden/`、`reports/` 里 |
 
@@ -120,9 +120,32 @@ code-audit/
 
 ## 用法
 
-### 已经可以用的：history + report
+### 已经可以用的：scan + history + report
 
-**1. 写候选清单**（以后由 scan 自动生成），放在被分析的仓库外面：
+**安装**：在 code-audit 目录运行 `npm install`，会连带装上 knip（可选依赖，只有 scan 用到；需要 Node 20.19 或 22.12 以上）。
+
+**1. 写项目配置**（复制 `profiles/example.js`），scan 至少要写入口：
+
+```js
+export default {
+  entries: ['src/main.js'],
+  testEntries: ['src/**/*.test.js'],   // 可选：区分「只有测试用到」
+  aliases: { '@': 'src' },             // 照抄构建配置里的 resolve.alias
+  scanIgnore: ['src/mock/**']          // 可选：不列为候选的文件
+}
+```
+
+**2. 扫描**，找出从入口走不到的文件，生成候选清单：
+
+```bash
+node bin/code-audit.js scan --root ../my-app --profile profiles/my-app.js --out reports/my-app/candidates.json
+```
+
+scan 只回答「从入口走不到」，不判定状态。分析的是提交里的代码（默认 HEAD，`--rev` 可指定），工作区没提交的改动不算：文件导出到系统临时目录再分析，不碰目标仓库的工作区和暂存区。提交号写进候选清单的 `rev`，history 默认查同一个提交，两边看到的是同一份代码。没有候选时输出空的 `files`，照样能交给 history、report。代码里的 `import.meta.glob` 会自动换算成入口；`require.context` 和参数不是字符串的 glob 换算不了，会在输出里提示。
+
+knip 的插件会加载项目里的配置文件（等于执行项目代码），所以 scan 关掉了全部插件，只保留解析 `.vue` / `.svelte` / `.astro` 的插件，并且不让它们读配置文件；跑完还会核对实际启用了哪些插件，有漏关的就报错。
+
+也可以不用 scan，手写候选清单：
 
 ```json
 {
@@ -136,15 +159,15 @@ code-audit/
 }
 ```
 
-`pattern` 可以不写，默认由文件最初的路径推出；`notes` 是人工备注，会原样出现在报告和头注释里。
+`pattern` 可以不写，默认由文件最初的路径推出；`notes` 是人工备注，会原样出现在报告和头注释里。手写时也可以加 `"rev": "<完整提交号>"`，history 就查那个提交；不写就查 HEAD。
 
-**2. 批量查 git 历史**，输出符合 schema 的完整数据：
+**3. 批量查 git 历史**，输出符合 schema 的完整数据：
 
 ```bash
-node bin/code-audit.js history --root ../my-app --in candidates.json --out reports/my-app/data.json
+node bin/code-audit.js history --root ../my-app --profile profiles/my-app.js --in reports/my-app/candidates.json --out reports/my-app/data.json
 ```
 
-**3. 生成报告、隔离清单、头注释**：
+**4. 生成报告、隔离清单、头注释**：
 
 ```bash
 node bin/code-audit.js report --in reports/my-app/data.json --out reports/my-app/out --moved-at 2026-11-05
@@ -164,16 +187,15 @@ headers/<路径>.txt    每个文件的头注释（没有历史或不能写注�
 node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 ```
 
-两个命令都支持 `--profile profiles/<项目名>.js`，用项目配置覆盖默认值（源码目录、扩展名、文案、表格列等），写法见 `profiles/example.js`。
+各命令都支持 `--profile profiles/<项目名>.js`，用项目配置覆盖默认值（源码目录、扩展名、文案、表格列等），写法见 `profiles/example.js`。
 
 **安全约定**：输出不能写在被分析的仓库里；输出文件已存在、输出目录不为空时直接报错，工具不覆盖、不删除已有文件。
 
-现阶段候选清单是人工写的，还没有经过规则判定，所以每一项的状态都是 `unknown`。
+现阶段还没有规则判定，所以每一项的状态都是 `unknown`；scan 的结论写在证据里（「从入口走不到」或「只有测试用到」）。
 
 ### 规划中
 
 ```bash
-node bin/code-audit.js scan       --root ../my-app --profile profiles/my-app.js   # M3：自动找出候选
 node bin/code-audit.js verify     --root ../my-app --in data.json                 # M5：实删验证
 node bin/code-audit.js quarantine --root ../my-app --in data.json                 # M7：隔离（会改动目标项目）
 ```
@@ -183,11 +205,12 @@ node bin/code-audit.js quarantine --root ../my-app --in data.json               
 ## 开发
 
 ```bash
-node -v        # 需要 Node 18 及以上
-npm test       # 使用 Node 内置的 node --test，无需安装依赖
+node -v        # 核心需要 Node 18 及以上；scan（knip）需要 20.19 或 22.12 以上
+npm install    # 装上 knip（可选依赖）
+npm test       # 使用 Node 内置的 node --test
 ```
 
-`test/golden/` 依赖本机有对应的真实项目；找不到时，相关测试会自动跳过，不会失败。
+没装 knip 时，真正调用 knip 的测试会自动跳过，其余测试照常运行。`test/golden/` 依赖本机有对应的真实项目；找不到时，相关测试会自动跳过，不会失败。
 
 ---
 

@@ -35,6 +35,12 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {Record<string, string>} statusLabels 各状态的显示文案；状态 ID 本身不变
  * @property {string[]} tableColumns 清单表格显示哪些列、按什么顺序（取值见 TABLE_COLUMNS）
  * @property {Record<string, string>} columnTitles 清单表格各列的标题
+ * @property {string[]} entries      scan 用：项目入口，相对仓库根目录，可以写 glob（如 src/main.js）
+ * @property {string[]} testEntries  scan 用：测试入口（如 src/**\/*.test.js）。写了就能区分「只被测试用到」；
+ *                                   匹配到的测试文件本身不会列为候选
+ * @property {Record<string, string>} aliases scan 用：路径别名 → 相对仓库根目录的目录，如 { "@": "src" }
+ *                                   （对应构建配置里的 resolve.alias）
+ * @property {string[]} scanIgnore   scan 用：不列为候选的文件（glob），如 mock、构建脚本
  */
 
 /** @type {Readonly<Config>} */
@@ -70,7 +76,13 @@ export const DEFAULT_CONFIG = Object.freeze({
     introduced: '引入',
     lostRef: '失去引用',
     notes: '备注'
-  })
+  }),
+  // scan 的入口没有默认值：猜错入口会把在用的文件当成没人用，所以必须由项目写明
+  entries: Object.freeze([]),
+  testEntries: Object.freeze([]),
+  // 别名没有默认值：@ 指向哪里各项目不同，猜错了引用会解析不到
+  aliases: Object.freeze({}),
+  scanIgnore: Object.freeze([])
 })
 
 /**
@@ -142,6 +154,24 @@ export function resolveConfig(overrides = {}) {
     if (typeof title !== 'string' || title.trim() === '') errors.push(`columnTitles["${col}"] 必须是非空字符串`)
   }
 
+  for (const key of ['entries', 'testEntries', 'scanIgnore']) {
+    if (!Array.isArray(config[key]) || !config[key].every(isRelativeGlob)) {
+      errors.push(`${key} 必须是相对仓库根目录的路径或 glob 组成的数组，如 ["src/main.js"]，不能以 / 开头，不能含 ..`)
+    }
+  }
+  if (!isPlainObject(config.aliases)) {
+    errors.push('aliases 必须是对象，如 { "@": "src" }')
+  } else {
+    for (const [name, dir] of Object.entries(config.aliases)) {
+      if (name === '' || name.includes('*') || name.endsWith('/')) {
+        errors.push(`aliases 的键必须是别名本身，如 "@"，不要写 /* 或结尾的 /：${name}`)
+      }
+      if (!isRelativeDir(dir) || dir.split('/').includes('..')) {
+        errors.push(`aliases["${name}"] 必须是相对仓库根目录的目录，如 "src"：${dir}`)
+      }
+    }
+  }
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -152,7 +182,11 @@ export function resolveConfig(overrides = {}) {
     headerStyles: Object.freeze({ ...config.headerStyles }),
     statusLabels: Object.freeze({ ...config.statusLabels }),
     tableColumns: Object.freeze([...config.tableColumns]),
-    columnTitles: Object.freeze({ ...config.columnTitles })
+    columnTitles: Object.freeze({ ...config.columnTitles }),
+    entries: Object.freeze([...config.entries]),
+    testEntries: Object.freeze([...config.testEntries]),
+    aliases: Object.freeze({ ...config.aliases }),
+    scanIgnore: Object.freeze([...config.scanIgnore])
   })
 }
 
@@ -181,4 +215,16 @@ function isPlainObject(v) {
 
 function isRelativeDir(v) {
   return typeof v === 'string' && v !== '' && !v.startsWith('/') && !v.endsWith('/') && !v.includes('\\')
+}
+
+/** 相对仓库根目录的路径或 glob：不以 / 开头，不含 ..，用 / 分隔 */
+function isRelativeGlob(v) {
+  return (
+    typeof v === 'string' &&
+    v !== '' &&
+    !v.startsWith('/') &&
+    !v.startsWith('!') &&
+    !v.includes('\\') &&
+    !v.split('/').includes('..')
+  )
 }
