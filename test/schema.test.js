@@ -185,7 +185,7 @@ test('history 内部结构不对不通过', () => {
   d.items[0].history = { introduced: { hash: 'short' }, lostRef: null, timeline: [{ change: 'x' }] }
   const msg = validate(d).join()
   assert.match(msg, /introduced.hash 必须是完整提交号/)
-  assert.match(msg, /timeline\[0\].change 必须是 add 或 remove/)
+  assert.match(msg, /timeline\[0\].change 必须是 add、remove 或 rename/)
 
   d.items[0].history = { introduced: commit(), lostRef: commit('2025-01-01'), timeline: [] }
   assert.deepEqual(validate(d), [])

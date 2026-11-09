@@ -1,7 +1,7 @@
 /**
  * 在注释里找候选文件的引用：被注释掉的 import、构建配置里注释掉的路径
  *
- *   // import { checkBrowser } from '@/utils/browser-check.js'
+ *   // import { legacyHelper } from '@/utils/legacy-helper.js'
  *   // old: path.resolve(__dirname, 'src/old.js')
  *   <!-- <script src="/src/old.js"></script> -->
  *
@@ -53,7 +53,7 @@ export function findCommentRefs({ files, targets, aliases = {} }) {
       const specs = [...c.text.matchAll(QUOTED)]
       if (HASH_COMMENT.some((e) => path.endsWith(e))) specs.push(...c.text.matchAll(BARE_PATH))
       for (const m of specs) {
-        const resolved = resolveSpec(m[2], path, aliases)
+        const resolved = resolveSpec(m[2], path, aliases, { text: true })
         if (resolved === null) continue
         for (const target of lookup.get(resolved) ?? []) {
           const line = c.line + countNewlines(c.text.slice(0, m.index))

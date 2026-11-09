@@ -10,6 +10,7 @@
  */
 import { findGlobImports, globToRegExp } from '../collect/glob-imports.js'
 import { findDynamicLoads, inScope, wideScope } from '../collect/dynamic-imports.js'
+import { matchesReview } from '../collect/scan.js'
 
 /**
  * @param {object} opts
@@ -22,7 +23,7 @@ export function makeRecaptureCheck({ files, readFile, config }) {
   const sources = files.filter((f) => config.sourceRoots.some((r) => f.startsWith(`${r}/`)) && config.extensions.some((e) => f.endsWith(e)))
   const contents = sources.map((path) => ({ path, content: readFile(path) }))
   const { globs, unresolved } = findGlobImports({ files: contents, aliases: config.aliases })
-  const reviewed = (l) => config.reviewedDynamicLoads.some((r) => r.from === l.from && r.expr === l.expr)
+  const reviewed = (l) => config.reviewedDynamicLoads.some((r) => matchesReview(r, l))
 
   const checks = [
     ...globs

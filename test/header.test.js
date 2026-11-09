@@ -178,3 +178,16 @@ test('状态文案来自配置，状态 ID 不变', () => {
   const config = resolveConfig({ statusLabels: { dead: 'unused' } })
   assert.match(renderHeader(item(), { config }), /状态：dead（unused）/)
 })
+
+test('引用方改名显示为一条「引用方改名 旧 → 新」', () => {
+  const c = { hash: 'a'.repeat(40), date: '2024-02-01', author: 'bob', subject: 'rename' }
+  const header = renderHeader(item({ history: { introduced: c, lostRef: null, timeline: [{ commit: c, change: 'add', from: 'src/Old.vue' }, { commit: c, change: 'rename', from: 'src/New.vue', previous: 'src/Old.vue' }] } }))
+  assert.match(header, /引用方改名 src\/Old\.vue → src\/New\.vue/)
+})
+
+test('引入是合并提交时，头注释里写上分支上新增的提交', () => {
+  const merge = { hash: 'b'.repeat(40), date: '2024-01-10', author: 'carol', subject: 'merge feature' }
+  const branch = { hash: 'c'.repeat(40), date: '2024-01-05', author: 'bob', subject: 'add math' }
+  const header = renderHeader(item({ history: { introduced: merge, introducedFrom: branch, lostRef: null, timeline: [] } }))
+  assert.match(header, /引入：2024-01-10 bbbbbbbb carol「merge feature」\n \*   分支上新增：2024-01-05 cccccccc bob「add math」/)
+})

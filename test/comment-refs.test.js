@@ -17,10 +17,14 @@ test('resolveSpec：相对、别名（取最长）、/ 开头、从仓库根目�
   assert.equal(resolveSpec('src/a/', 'vite.config.js', aliases), 'src/a')
 })
 
-test('resolveSpec：不像路径的返回 null（有空格、网址、跑出仓库、空的）', () => {
-  for (const spec of ['a b', 'https://x.com/a.js', '../../a.js', '', '.', '  ']) {
+test('resolveSpec：不像路径的返回 null（网址、跑出仓库、空的）；文字里带空格的当成句子', () => {
+  for (const spec of ['https://x.com/a.js', '../../a.js', '', '.', '  ']) {
     assert.equal(resolveSpec(spec, 'src/x.js', {}), null, spec)
   }
+  assert.equal(resolveSpec('a b', 'src/x.js', {}, { text: true }), null)
+  // import 里的路径：文件名真有带空格的，照常解析
+  assert.equal(resolveSpec('./ setting.js', 'src/utils/x.js', {}), 'src/utils/ setting.js')
+  assert.equal(resolveSpec('@/utils/ setting', 'src/x.js', { '@': 'src' }), 'src/utils/ setting')
 })
 
 test('注释掉的 import：别名、相对路径、省略扩展名、index 目录写法，都算', () => {

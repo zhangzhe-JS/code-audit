@@ -38,8 +38,8 @@ test('findComponentVarUses：:is / v-bind:is 是变量、resolveComponent 参数
 // ---------- ② 同名标签 ----------
 
 test('componentName：从路径推组件名', () => {
-  assert.equal(componentName('src/BasicModal.vue'), 'BasicModal')
-  assert.equal(componentName('src/basic-modal/index.vue'), 'BasicModal')
+  assert.equal(componentName('src/UserCard.vue'), 'UserCard')
+  assert.equal(componentName('src/user-card/index.vue'), 'UserCard')
   assert.equal(componentName('src/my_card.vue'), 'MyCard')
   assert.equal(componentName('index.vue'), null)
 })
@@ -47,13 +47,13 @@ test('componentName：从路径推组件名', () => {
 test('findSameNameTags：在用的模板里有同名标签算 used，只在注释里的算 commented；自己 import 了同名组件的、单个单词的短横线写法不算', () => {
   const r = findSameNameTags({
     files: [
-      { path: 'src/Page.vue', content: '<template>\n  <BasicModal />\n  <!-- <old-card /> -->\n  <header />\n  <Header-x />\n</template>' },
-      { path: 'src/Other.vue', content: "<template><BasicModal /></template><script setup>import BasicModal from './x/BasicModal.vue'</script>" },
-      { path: 'src/Named.vue', content: "<template><BasicModal /></template><script setup>import { BasicModal } from '@/ui'</script>" }
+      { path: 'src/Page.vue', content: '<template>\n  <UserCard />\n  <!-- <old-card /> -->\n  <header />\n  <Header-x />\n</template>' },
+      { path: 'src/Other.vue', content: "<template><UserCard /></template><script setup>import UserCard from './x/UserCard.vue'</script>" },
+      { path: 'src/Named.vue', content: "<template><UserCard /></template><script setup>import { UserCard } from '@/ui'</script>" }
     ],
-    targets: ['src/components/BasicModal/index.vue', 'src/components/OldCard.vue', 'src/Header.vue']
+    targets: ['src/components/UserCard/index.vue', 'src/components/OldCard.vue', 'src/Header.vue']
   })
-  assert.deepEqual([...r.used], [['src/components/BasicModal/index.vue', [{ from: 'src/Page.vue', line: 2, tag: '<BasicModal>' }]]])
+  assert.deepEqual([...r.used], [['src/components/UserCard/index.vue', [{ from: 'src/Page.vue', line: 2, tag: '<UserCard>' }]]])
   assert.deepEqual([...r.commented], [['src/components/OldCard.vue', [{ from: 'src/Page.vue', line: 3, tag: '<old-card>' }]]])
 })
 
@@ -287,4 +287,36 @@ test('scan + knip：自动导入登记的本地函数，用到的算在用；没
   const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.ts'] }) })
   assert.deepEqual(r.candidates.files.map((f) => [f.file, f.status]), [['src/composables/useOld.ts', 'dead']])
   assert.equal(r.summary.blindSpots.autoImports, 3)
+})
+
+test('findExternalRefs：省略扩展名的路径正好也是目录时有歧义，不算确认引用，记进 ambiguous；带扩展名的照常算', () => {
+  const files = [{ path: 'scripts/gen.js', content: "const out = path.join(ROOT, 'src/i18n/menu')\nconst src = path.join(ROOT, 'src/i18n/menu.js')" }]
+  const ambiguous = new Map()
+  const isDir = (p) => p === 'src/i18n/menu'
+  const found = findExternalRefs({ files: [{ path: 'scripts/a.js', content: files[0].content.split('\n')[0] }], targets: ['src/i18n/menu.js'], isDir, ambiguous })
+  assert.equal(found.size, 0)
+  assert.deepEqual(ambiguous.get('src/i18n/menu.js').map((r) => r.line), [1])
+  assert.match(ambiguous.get('src/i18n/menu.js')[0].text, /也可能指同名目录 src\/i18n\/menu\//)
+  const both = findExternalRefs({ files, targets: ['src/i18n/menu.js'], isDir, ambiguous: new Map() })
+  assert.deepEqual(both.get('src/i18n/menu.js').map((r) => r.line), [2])
+  // 不是目录时，省略扩展名照常算确认引用
+  assert.equal(findExternalRefs({ files, targets: ['src/i18n/menu.js'] }).get('src/i18n/menu.js').length, 2)
+})
+
+test('reviewedDynamicLoads：expr 写 * 时放过这个文件里的所有动态加载；没用上时提示', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/main.ts', "import App from './App.vue'\n")
+  repo.write('src/App.vue', '<template>\n  <component :is="a" />\n  <component :is="b" />\n</template>\n')
+  repo.write('src/components/Modal.vue', '<template><i /></template>\n')
+  repo.write('src/components.d.ts', "declare module 'vue' { export interface GlobalComponents {\n  Modal: (typeof import('./components/Modal.vue'))['default']\n} }\n")
+  repo.commit('init')
+  const reviewed = [
+    { from: 'src/App.vue', expr: '*', reason: '都是图标' },
+    { from: 'src/Gone.vue', expr: '*', reason: '已删除' }
+  ]
+  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.ts'], reviewedDynamicLoads: reviewed }), knipDir: fakeKnipDir(t), run: fake(['src/components/Modal.vue']) })
+  assert.equal(r.candidates.files[0].status, 'dead')
+  assert.equal(r.candidates.files[0].evidence.filter((e) => e.rule === 'reviewed-dynamic-load').length, 2)
+  assert.match(r.summary.warnings.map((w) => w.detail).join(), /src\/Gone\.vue 的动态加载（\*）\s?在这个提交里找不到/)
 })

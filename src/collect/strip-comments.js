@@ -13,7 +13,7 @@
  *
  * 已知限制：
  * - 只处理 JS 注释；.vue 模板里的 <!-- --> 由 vue 插件处理
- * - 除号/正则的推断在极少数写法下会出错（如 a++ / b / c），出错时最多少去掉一段注释
+ * - 除号/正则的推断在极少数写法下会出错，出错时最多少去掉一段注释（a++ / b 这种后置自增已经认得出）
  */
 
 // 出现在这些字符后面的 /，是正则的开头
@@ -175,6 +175,12 @@ function regexAllowed(out) {
   if (j < 0) return true // 文件开头
 
   const ch = out[j]
+  // a++ / b、a-- / b：后置的 ++ / -- 后面是除号（前面是变量、) 或 ]）
+  if ((ch === '+' || ch === '-') && out[j - 1] === ch) {
+    let k = j - 2
+    while (k >= 0 && /\s/.test(out[k])) k--
+    if (k >= 0 && /[\w$)\]]/.test(out[k])) return false
+  }
   if (REGEX_AFTER_CHARS.includes(ch)) return true
   if (!/[\w$]/.test(ch)) return false // ) ] 引号等后面是除号
 

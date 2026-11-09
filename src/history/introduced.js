@@ -147,3 +147,28 @@ function keepRatio(root, commit, from, to) {
 function meaningfulLines(text) {
   return text.split('\n').map((l) => l.trim()).filter(Boolean)
 }
+
+/**
+ * 引入的提交是合并提交时，找出分支上真正新增这个文件的提交（谁写的、哪天写的）
+ * 主线视角下文件是在合并时进来的，作者显示成合并的人；这里补上分支上的那次提交
+ * @param {string} root
+ * @param {string} hash  引入的提交（主线上）
+ * @param {string} path  文件当时的路径
+ * @returns {import('../core/schema.js').Commit | null} 不是合并提交、或找不到时返回 null
+ */
+export function findBranchIntroduced(root, hash, path) {
+  const parents = git(root, ['rev-list', '--parents', '-n', '1', hash]).split(' ').slice(1)
+  if (parents.length < 2) return null
+  const out = git(root, [
+    'log',
+    '--reverse',
+    '--diff-filter=A',
+    '--date=short',
+    `--format=${COMMIT_FORMAT}`,
+    `${parents[0]}..${parents[1]}`,
+    '--',
+    path
+  ])
+  const first = out.split('\n').find(Boolean)
+  return first ? parseCommit(first) : null
+}

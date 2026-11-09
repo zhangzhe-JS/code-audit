@@ -146,3 +146,16 @@ test('inScope：require.context 的正则和是否含子目录', () => {
   // 正则对 ./相对路径 测试，和 webpack 一致
   assert.equal(inScope('src/m/a.js', { ...s, regex: /^\.\/a\.js$/ }), true)
 })
+
+test('写在字符串里的 import(、require(、import.meta.glob( 不算调用；模板字符串 ${} 里的照常算', async () => {
+  const { findGlobImports } = await import('../src/collect/glob-imports.js')
+  const code = [
+    "const doc = 'use import(`./x/${n}`) to load'",
+    'const tip = "require(name) is old"',
+    'const t = `${import(`./pages/${p}`)}`',
+    "const g = 'import.meta.glob(pattern)'"
+  ].join('\n')
+  const loads = find('src/a.js', code)
+  assert.deepEqual(loads.map((l) => [l.line, l.scope.dir]), [[3, 'src/pages']])
+  assert.deepEqual(findGlobImports({ files: [{ path: 'src/a.js', content: code }] }).unresolved, [])
+})

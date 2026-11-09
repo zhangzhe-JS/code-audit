@@ -159,9 +159,11 @@ export const VIAS = ['static', 'reexport', 'glob', 'dynamic', 'comment', 'config
 
 /**
  * @typedef {object} History
- * @property {Commit} introduced
+ * @property {Commit} introduced  进入主线的提交（日期按主线）
+ * @property {Commit} [introducedFrom] introduced 是合并提交时，分支上真正新增这个文件的提交（真正的作者）
  * @property {Commit|null} lostRef  null = 从来没被引用过
- * @property {{commit: Commit, change: 'add'|'remove', from: string}[]} timeline
+ * @property {{commit: Commit, change: 'add'|'remove'|'rename', from: string, previous?: string}[]} timeline
+ *   rename：引用方改了名（previous 是旧路径，from 是新路径），仍在引用
  * @property {string[]} [paths]  文件用过的所有路径，从当前到最初；最后一个是原路径
  * @property {string} [pattern]   查找引用时搜索的字符串。按字面搜索，结论的可信度取决于它：
  *                                比如同目录的相对路径引用（'./x'）不包含它，就会漏算
@@ -338,14 +340,16 @@ function validateCommit(c, at, err) {
 function validateHistory(h, at, err) {
   if (!isObject(h)) return err(`${at} 必须是对象或 null`)
   validateCommit(h.introduced, `${at}.introduced`, err)
+  if (h.introducedFrom !== undefined) validateCommit(h.introducedFrom, `${at}.introducedFrom`, err)
   if (h.lostRef !== null) validateCommit(h.lostRef, `${at}.lostRef`, err)
   if (!Array.isArray(h.timeline)) return err(`${at}.timeline 必须是数组`)
   h.timeline.forEach((e, k) => {
     const eat = `${at}.timeline[${k}]`
     if (!isObject(e)) return err(`${eat} 必须是对象`)
     validateCommit(e.commit, `${eat}.commit`, err)
-    if (e.change !== 'add' && e.change !== 'remove') err(`${eat}.change 必须是 add 或 remove：${e.change}`)
+    if (!['add', 'remove', 'rename'].includes(e.change)) err(`${eat}.change 必须是 add、remove 或 rename：${e.change}`)
     if (!isRelativePath(e.from)) err(`${eat}.from 必须是相对路径：${e.from}`)
+    if (e.change === 'rename' && !isRelativePath(e.previous)) err(`${eat}.previous 必须是相对路径（改名前的引用方）：${e.previous}`)
   })
   if (h.paths !== undefined) {
     if (!Array.isArray(h.paths) || h.paths.length === 0 || !h.paths.every(isRelativePath)) {

@@ -6,15 +6,13 @@
  *
  * 只需要写和默认值不同的项，没写的项使用默认值（见 src/core/config.js）
  */
-import { DEFAULT_CONFIG } from '../src/core/config.js'
-
 export default {
   // 源码根目录：项目里 @/ 等别名指向的目录。推 pattern 时会去掉这一段
   // 例：Nuxt 项目可能是 ['app']，monorepo 可能是 ['packages/web/src', 'packages/admin/src']
   sourceRoots: ['src'],
 
-  // 只在这些扩展名的文件里找引用方；在默认列表基础上补充时，用展开写法
-  extensions: [...DEFAULT_CONFIG.extensions, '.astro', '.mdx'],
+  // 源码文件的扩展名。写了就整个替换默认值（默认 .js .mjs .cjs .jsx .ts .mts .cts .tsx .vue .svelte），要补充时把默认的也写上
+  extensions: ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.mts', '.cts', '.tsx', '.vue', '.svelte', '.astro'],
 
   // 报告里提交号显示几位（4～40）
   shortHashLength: 8,
@@ -46,7 +44,10 @@ export default {
 
   // 人工确认过、不会加载本地源码的动态加载（路径开头就是变量时，scan 会把范围内的候选都判 unknown）
   // from、expr 照抄 scan 输出里的警告；reason 必填，会写进报告
-  reviewedDynamicLoads: [{ from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' }],
+  reviewedDynamicLoads: [
+    { from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' },
+    { from: 'src/layout/Sidebar.vue', expr: '*', reason: '这个文件里的 :is 都是图标组件' } // * 表示这个文件里的所有动态加载
+  ],
 
   // 判断「其他分支在用」时查哪些没合并的分支。默认都查；不会再合回来的老版本线可以排除
   branches: { ignore: ['origin/release/**'], maxAgeDays: 180 },

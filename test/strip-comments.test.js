@@ -118,3 +118,11 @@ test('findComments：去注释的结果不受影响', () => {
   assert.equal(stripComments(code, comments), stripComments(code))
   assert.equal(comments.length, 2)
 })
+
+test('后置 ++ / -- 后面的 / 是除号，不是正则：后面的注释照常去掉', () => {
+  assert.equal(stripComments('x = a++ / b / c // 注释'), 'x = a++ / b / c ')
+  assert.equal(stripComments('x = arr[i]-- / 2 /* 注释 */'), 'x = arr[i]-- / 2 ')
+  assert.equal(stripComments('f()++ / 2 // c'), 'f()++ / 2 ')
+  // 前置的 ++ 后面接正则（少见，但要照常认）
+  assert.equal(stripComments('x = + +/a\\/\\/b/.test(s) // c'), 'x = + +/a\\/\\/b/.test(s) ')
+})

@@ -9,6 +9,8 @@
  * 按路径匹配（去掉扩展名，带不带扩展名都算），两侧有边界：
  *   src/a 不匹配 src/a.config.js、src/a/b.js、src/ab.js
  * index 文件也认目录写法：src/a/index.js 匹配 'src/a'（只认多级目录：'src' 这种顶层目录名太常见）
+ * 省略扩展名的写法正好也是个目录（提交里有 src/i18n/menu.js，也有 src/i18n/menu/ 目录）时，'src/i18n/menu' 指哪个说不准：
+ * 不算确认的引用，记进 ambiguous，由规则判 unknown（写了扩展名的照常算）
  * JS 类文件、html 先去掉注释（注释掉的引用不算在用，由 comment-refs 判为注释停用）；json、yml 等原样搜
  *
  * JS 类文件里还会：
@@ -64,10 +66,12 @@ export function externalFiles({ all, sourceRoots, extensions, exclude }) {
  * @param {{path: string, content: string}[]} opts.files  要搜的文件
  * @param {string[]} opts.targets  候选文件
  * @param {Record<string, string>} [opts.aliases]
+ * @param {(path: string) => boolean} [opts.isDir] 提交里有没有这个目录（省略扩展名的写法判断歧义用）
+ * @param {Map<string, ExternalRef[]>} [opts.ambiguous] 有歧义的写法收集到这里（判 unknown）
  * @returns {Map<string, ExternalRef[]>} 候选文件 → 写着它路径的地方；没有的不在 Map 里
  */
-export function findExternalRefs({ files, targets, aliases = {} }) {
-  const matchers = targets.map((t) => ({ target: t, forms: formsOf(t) }))
+export function findExternalRefs({ files, targets, aliases = {}, isDir = () => false, ambiguous = new Map() }) {
+  const matchers = targets.map((t) => ({ target: t, forms: formsOf(t, isDir) }))
   const lookup = buildLookup(targets)
   const result = new Map()
   const add = (target, path, code, index, line = lineAt(code, index)) => {
@@ -84,19 +88,39 @@ export function findExternalRefs({ files, targets, aliases = {} }) {
     for (const { target, forms } of matchers) {
       for (const form of forms) {
         if (!code.includes(form.text)) continue
-        for (const m of code.matchAll(form.re)) add(target, path, code, m.index)
+        for (const m of code.matchAll(form.re)) {
+          if (!form.ambiguous) {
+            add(target, path, code, m.index)
+            continue
+          }
+          const line = lineAt(code, m.index)
+          const list = ambiguous.get(target) ?? []
+          if (!list.some((r) => r.from === path && r.line === line)) {
+            list.push({ from: path, line, text: `${lineText(code, line)}（不带扩展名，也可能指同名目录 ${form.text}/）` })
+          }
+          ambiguous.set(target, list)
+        }
       }
     }
     if (!JS_LIKE.some((e) => path.endsWith(e))) continue
+    // 解析出的路径：正好是个目录（又不是文件本身）时说不准，记成有歧义
+    const addResolved = (resolved, line) => {
+      for (const target of lookup.get(resolved) ?? []) {
+        if (resolved !== target && isDir(resolved)) {
+          const list = ambiguous.get(target) ?? []
+          if (!list.some((r) => r.from === path && r.line === line)) {
+            list.push({ from: path, line, text: `${lineText(code, line)}（不带扩展名，也可能指同名目录 ${resolved}/）` })
+          }
+          ambiguous.set(target, list)
+        } else {
+          add(target, path, code, 0, line)
+        }
+      }
+    }
     // 相对这个文件的路径：'./x'、'../src/x'
-    for (const m of code.matchAll(/(["'`])(\.\.?\/[^"'`\n]+)\1/g)) {
-      const resolved = resolveSpec(m[2], path, aliases)
-      for (const target of lookup.get(resolved) ?? []) add(target, path, code, m.index)
-    }
+    for (const m of code.matchAll(/(["'`])(\.\.?\/[^"'`\n]+)\1/g)) addResolved(resolveSpec(m[2], path, aliases), lineAt(code, m.index))
     // path.join / path.resolve 的各段都能算出来时，拼起来
-    for (const { line, candidates } of joinedPaths(code, path)) {
-      for (const p of candidates) for (const target of lookup.get(p) ?? []) add(target, path, code, 0, line)
-    }
+    for (const { line, candidates } of joinedPaths(code, path)) for (const p of candidates) addResolved(p, line)
   }
   for (const refs of result.values()) refs.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.line - b.line))
   return result
@@ -172,10 +196,17 @@ export function findExternalMaybe({ files, targets, found }) {
  * - 去掉扩展名的路径，后面可以跟原扩展名：src/a/b → src/a/b、src/a/b.js
  * - index 文件再加目录写法：src/a/index.js → src/a、src/a/
  */
-function formsOf(file) {
+function formsOf(file, isDir = () => false) {
   const ext = posix.extname(file)
   const stem = ext ? file.slice(0, -ext.length) : file
-  const forms = [{ text: stem, re: bounded(escape(stem) + (ext ? `(?:${escape(ext)})?` : '')) }]
+  const forms = []
+  if (ext && isDir(stem)) {
+    // 省略扩展名的写法也可能指同名目录：只认带扩展名的；不带的单独记成有歧义
+    forms.push({ text: stem, re: bounded(escape(stem) + escape(ext)) })
+    forms.push({ text: stem, re: bounded(`${escape(stem)}/?`), ambiguous: true })
+  } else {
+    forms.push({ text: stem, re: bounded(escape(stem) + (ext ? `(?:${escape(ext)})?` : '')) })
+  }
   if (posix.basename(stem) === 'index' && posix.dirname(stem).includes('/')) {
     const dir = posix.dirname(stem)
     forms.push({ text: dir, re: bounded(`${escape(dir)}/?`) })

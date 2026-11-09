@@ -35,6 +35,8 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {Record<string, string>} statusLabels 各状态的显示文案；状态 ID 本身不变
  * @property {string[]} tableColumns 清单表格显示哪些列、按什么顺序（取值见 TABLE_COLUMNS）
  * @property {Record<string, string>} columnTitles 清单表格各列的标题
+ * @property {number|null} tableSubjectMaxLength 清单表格里提交说明最多显示几个字，超出的用 … 代替；null = 不截断。
+ *                                   合并提交的说明常带仓库地址，很长，会把表格撑宽；报告详情、头注释里仍是全文
  * @property {string[]} entries      scan 用：项目入口，相对仓库根目录，可以写 glob（如 src/main.js）
  * @property {string[]} testEntries  scan 用：测试入口（如 src/**\/*.test.js）。写了就能区分「只被测试用到」；
  *                                   匹配到的测试文件本身不会列为候选
@@ -43,7 +45,8 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {string[]} scanIgnore   scan 用：不列为候选的文件（glob），如 mock、构建脚本
  * @property {{from: string, expr: string, reason: string}[]} reviewedDynamicLoads scan 用：人工确认过、
  *                                   不会加载本地源码的动态加载（如加载 CDN 上的脚本）。
- *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法，reason 写确认的理由（会写进报告）
+ *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法（写 * 表示这个文件里的所有动态加载），
+ *                                   reason 写确认的理由（会写进报告）
  * @property {VerifyConfig} verify    verify 用：在临时目录里跑的命令。没有默认值：各项目不同，猜错了就是乱跑
  * @property {BranchesConfig} branches scan 用：判断「其他分支在用」时查哪些没合并的分支
  * @property {QuarantineConfig} quarantine quarantine 用：隔离区放在哪
@@ -57,7 +60,7 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {string} dirName  隔离目录的名字，默认 _deprecated。路径里有一段叫这个名字的文件都算已经隔离过
  * @property {string|null} dir   central 用：隔离区目录；null = 第一个源码目录下的 <dirName>（如 src/_deprecated）
  * @property {string|null} base  central 用：文件按相对 base 的路径放进 dir；null = 第一个源码目录。
- *   例：dir 'src/utils/_deprecated'、base 'src/utils'：src/utils/canvas/Rect.js → src/utils/_deprecated/canvas/Rect.js
+ *   例：dir 'src/lib/_deprecated'、base 'src/lib'：src/lib/geometry/shape.js → src/lib/_deprecated/geometry/shape.js
  *   不在 base 下的文件不隔离
  */
 
@@ -108,6 +111,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     lostRef: '失去引用',
     notes: '备注'
   }),
+  tableSubjectMaxLength: 40,
   // scan 的入口没有默认值：猜错入口会把在用的文件当成没人用，所以必须由项目写明
   entries: Object.freeze([]),
   testEntries: Object.freeze([]),
@@ -243,6 +247,9 @@ export function resolveConfig(overrides = {}) {
   }
   const age = config.branches.maxAgeDays
   if (age !== null && (!Number.isInteger(age) || age < 1)) errors.push(`branches.maxAgeDays 必须是正整数（天）或 null：${age}`)
+
+  const sm = config.tableSubjectMaxLength
+  if (sm !== null && (!Number.isInteger(sm) || sm < 4)) errors.push(`tableSubjectMaxLength 必须是不小于 4 的整数，或 null（不截断）：${sm}`)
 
   for (const k of Object.keys(config.quarantine)) {
     if (!['layout', 'dirName', 'dir', 'base'].includes(k)) errors.push(`quarantine 里不认识的字段：${k}（可用的字段：layout、dirName、dir、base）`)

@@ -5,6 +5,7 @@
  * - 改过 / 新增的源码文件 import 了候选：合并回来以后就有人用了
  * - 分支直接改了候选文件本身：还有人在改它，现在删，合并时会冲突
  * 分支没动过的文件，合并后用的是当前分支的版本，不会把引用带回来，所以不看。
+ * 已经 cherry-pick 到当前分支的提交也不看（git 按改动内容认出来）：那些改动已经在当前分支上了
  *
  * 只读：只读本地已有的分支（含远程跟踪分支 origin/xxx），不 fetch；远程分支以上次 fetch 的为准
  */
@@ -88,7 +89,14 @@ export function findBranchRefs({ root, rev, targets, extensions, aliases = {}, b
     const diff = git(root, ['diff', '--name-status', '--no-renames', '-z', base, hash], { raw: true })
     const parts = diff.split('\0').filter(Boolean)
     const changed = []
-    for (let i = 0; i + 1 < parts.length; i += 2) changed.push({ status: parts[i], path: parts[i + 1] })
+    // 只留分支上还没摘到当前分支的提交改过的文件：cherry-pick 过的改动已经在当前分支上，不算
+    const own = new Set(
+      git(root, ['log', '--right-only', '--cherry-pick', '--no-merges', '--no-renames', '--name-only', '--format=', '-z', `${rev}...${hash}`], { raw: true })
+        .split('\0')
+        .map((x) => x.replace(/^\n+/, ''))
+        .filter(Boolean)
+    )
+    for (let i = 0; i + 1 < parts.length; i += 2) if (own.has(parts[i + 1])) changed.push({ status: parts[i], path: parts[i + 1] })
 
     for (const { status, path } of changed) {
       if (status === 'M' && targetSet.has(path)) add(path, { branch, date, kind: 'modified' })

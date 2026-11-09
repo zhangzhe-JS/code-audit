@@ -111,7 +111,7 @@ test('scan：配置了测试入口时跑两次，区分「只有测试用到」�
   const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
 
   assert.equal(fake.calls.length, 2)
-  assert.deepEqual(fake.calls[1].entry.at(-1), 'src/tests/**/*.test.js')
+  assert.ok(fake.calls[1].entry.includes('src/tests/**/*.test.js'))
   assert.deepEqual(
     r.candidates.files.map((f) => [f.file, f.evidence[0].rule]),
     [
@@ -563,4 +563,22 @@ test('scan 命令：写出候选清单，统计写到 stderr', needsKnip, (t) =>
   assert.equal(c.project, 'demo')
   assert.deepEqual(validateCandidates(c), [])
   assert.equal(c.rev, repo.run(['rev-parse', 'HEAD']))
+})
+
+test('scan + knip：写 import.meta.glob 的文件本身没人用时，它加载的文件不算在用，跟着它判 dead-only-ref', needsKnip, (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/main.js', "import './live.js'\n")
+  repo.write('src/live.js', "export const pages = import.meta.glob('./pages/*.js', { eager: true })\n")
+  repo.write('src/pages/a.js', 'export const a = 1\n')
+  repo.write('src/old/loader.js', "export const parts = import.meta.glob('./parts/*.js', { eager: true })\n")
+  repo.write('src/old/parts/x.js', 'export const x = 1\n')
+  repo.write('src/old/parts/y.js', 'export const y = 1\n')
+  repo.commit('init')
+  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }) })
+  const by = Object.fromEntries(r.candidates.files.map((f) => [f.file, f]))
+  assert.deepEqual(Object.keys(by).sort(), ['src/old/loader.js', 'src/old/parts/x.js', 'src/old/parts/y.js'])
+  assert.equal(by['src/old/loader.js'].status, 'dead')
+  assert.equal(by['src/old/parts/x.js'].status, 'dead-only-ref')
+  assert.deepEqual(by['src/old/parts/x.js'].refs, [{ from: 'src/old/loader.js', line: 1, via: 'static' }])
 })

@@ -16,8 +16,8 @@
  */
 import { DEFAULT_CONFIG } from './../core/config.js'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { findGlobImports } from './glob-imports.js'
+import { join, posix } from 'node:path'
+import { findGlobImports, globToRegExp } from './glob-imports.js'
 import { addCompilerDeps, buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
 import { createSnapshot } from './snapshot.js'
 import { findDynamicLoads } from './dynamic-imports.js'
@@ -114,7 +114,6 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   // 2. import.meta.glob → 入口
   const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
   const { globs: globImports, warnings, unresolved: unresolvedGlobs } = findGlobImports({ files: contents, aliases: config.aliases })
-  const globEntries = [...new Set(globImports.map((g) => g.resolved))]
   // 测试文件：在临时目录被改动（下面补 import）之前读出原样
   const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
 
@@ -137,12 +136,24 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   const knipConfig = (entry) => buildKnipConfig({ entry, project: projectGlobs, aliases: config.aliases, pluginNames })
 
   // 3. 只用项目入口
-  const main = run({ knip, root: snap.dir, config: knipConfig([...config.entries, ...globEntries]) })
+  // glob 写在没人用的文件里时，它加载的文件不能算在用：拿掉这些 glob 再跑，直到不再变化
+  const runWithGlobs = (baseEntries) => {
+    let active = globImports
+    for (let round = 0; ; round++) {
+      const r = run({ knip, root: snap.dir, config: knipConfig([...baseEntries, ...new Set(active.map((g) => g.resolved))]) })
+      const unused = new Set(r.unusedFiles)
+      const next = active.filter((g) => !unused.has(g.from))
+      if (next.length === active.length || round >= 4) return { result: r, dropped: globImports.filter((g) => !next.includes(g)) }
+      active = next
+    }
+  }
+  const mainRun = runWithGlobs(config.entries)
+  const main = mainRun.result
 
   // 4. 加上测试入口
   let withTests = null
   if (config.testEntries.length > 0) {
-    withTests = run({ knip, root: snap.dir, config: knipConfig([...config.entries, ...globEntries, ...config.testEntries]) })
+    withTests = runWithGlobs([...config.entries, ...config.testEntries]).result
   }
   const stillUnused = new Set(withTests?.unusedFiles ?? [])
 
@@ -206,8 +217,8 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
     allLoads.push(l)
   }
   for (const r of config.reviewedDynamicLoads) {
-    if (!allLoads.some((l) => l.from === r.from && l.expr === r.expr)) {
-      warnings.push({ from: r.from, line: 0, detail: `配置 reviewedDynamicLoads 里的 ${r.expr} 在这个提交里找不到（代码改了？），这条确认没有用上` })
+    if (!allLoads.some((l) => matchesReview(r, l))) {
+      warnings.push({ from: r.from, line: 0, detail: `配置 reviewedDynamicLoads 里的 ${r.expr === '*' ? `${r.from} 的动态加载（*）` : r.expr} 在这个提交里找不到（代码改了？），这条确认没有用上` })
     }
   }
   for (const l of loads.filter((x) => x.scope.wide && x.kind !== 'import.meta.glob' && !isReviewed(x, config.reviewedDynamicLoads))) {
@@ -222,7 +233,14 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   }
   const targets = files.map((f) => f.file)
   const otherContents = others.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-  const externalRefs = findExternalRefs({ files: otherContents, targets, aliases: config.aliases })
+  // 省略扩展名的路径正好也是目录时有歧义：不算确认的引用，和拼出来的路径一起判 unknown
+  const dirSet = new Set(snap.list(['.']).flatMap((f) => {
+    const out = []
+    for (let d = posix.dirname(f); d !== '.'; d = posix.dirname(d)) out.push(d)
+    return out
+  }))
+  const ambiguousRefs = new Map()
+  const externalRefs = findExternalRefs({ files: otherContents, targets, aliases: config.aliases, isDir: (p) => dirSet.has(p), ambiguous: ambiguousRefs })
   // 注释只看在用的文件：候选（没人用的）、测试文件里的注释不算
   const candidateSet = new Set(targets)
   const commentRefs = findCommentRefs({
@@ -234,9 +252,18 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   const onlyFrom = (refs, from) => new Map([...refs].map(([k, v]) => [k, v.filter((r) => from.has(r.from))]).filter(([, v]) => v.length > 0))
   const testRefs = mergeRefs(findImportRefs({ files: testContents, targets, aliases: config.aliases }), onlyFrom(tagUses, testFiles))
   // 候选之间的 import：只被没人用的文件引用的，跟着引用方处理
+  // 写在没人用的文件里的 glob（上面拿掉的）：它加载的候选算被那个文件引用，跟着它处理（dead-only-ref）
+  const globEdges = new Map()
+  for (const g of mainRun.dropped.filter((x) => !x.resolved.startsWith('!') && candidateSet.has(x.from))) {
+    const re = globToRegExp(g.resolved)
+    for (const t of targets.filter((f) => f !== g.from && re.test(f))) globEdges.set(t, [...(globEdges.get(t) ?? []), { from: g.from, line: g.line }])
+  }
   const importers = mergeRefs(
-    findImportRefs({ files: contents.filter((c) => candidateSet.has(c.path)), targets, aliases: config.aliases }),
-    new Map([...onlyFrom(tagUses, candidateSet)].filter(([k]) => candidateSet.has(k)))
+    mergeRefs(
+      findImportRefs({ files: contents.filter((c) => candidateSet.has(c.path)), targets, aliases: config.aliases }),
+      new Map([...onlyFrom(tagUses, candidateSet)].filter(([k]) => candidateSet.has(k)))
+    ),
+    globEdges
   )
   // 没合并的分支：分支自己改过的文件里 import 了候选，或者改了候选本身
   const branchScan = findBranchRefs({ root, rev: snap.commit, targets, extensions: config.extensions, aliases: config.aliases, branches: config.branches })
@@ -249,7 +276,7 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
     autoImportPlugin && !autos.found
       ? findBareExportUses({ files: live, targets: contents.filter((c) => candidateSet.has(c.path) && !c.path.endsWith('.vue')) })
       : new Map()
-  const externalMaybe = findExternalMaybe({ files: otherContents, targets, found: externalRefs })
+  const externalMaybe = mergeRefs(findExternalMaybe({ files: otherContents, targets, found: externalRefs }), new Map([...ambiguousRefs].filter(([k]) => !externalRefs.has(k))))
   const blindSpots = { sameNameTags: tags.used, commentedTags: tags.commented, bareExports, externalMaybe }
   const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, branchRefs: branchScan.refs, blindSpots, importers })
   const byStatus = {}
@@ -314,7 +341,12 @@ function refsByBranch(refs) {
 
 /** 这处动态加载有没有人工确认过：按写加载的文件和写法匹配；确认过返回那条配置 */
 function isReviewed(load, reviewed) {
-  return reviewed.find((r) => r.from === load.from && r.expr === load.expr) ?? null
+  return reviewed.find((r) => matchesReview(r, load)) ?? null
+}
+
+/** 一条人工确认管不管这处动态加载：同一个文件，写法一样；expr 写 * 时管这个文件里的所有动态加载 */
+export function matchesReview(review, load) {
+  return review.from === load.from && (review.expr === '*' || review.expr === load.expr)
 }
 
 /** glob 写成 git 的 pathspec：和 knip 的 glob 写法一致（** 跨目录） */

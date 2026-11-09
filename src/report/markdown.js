@@ -100,10 +100,12 @@ function renderItem(item, config) {
     // 时间线是按字面搜索这个字符串得出的；看报告的人据此判断有没有漏掉的引用写法
     if (h.pattern) lines.push(`  - 搜索的引用写法：${inlineCode(h.pattern)}`)
     lines.push(`  - 引入：${oneLine(full(h.introduced))}`)
+    if (h.introducedFrom) lines.push(`  - 分支上新增：${oneLine(full(h.introducedFrom))}`)
     for (const g of groupTimeline(h.timeline)) {
       const parts = []
       if (g.added.length) parts.push(`新增引用 ${g.added.map(inlineCode).join('、')}`)
       if (g.removed.length) parts.push(`去掉引用 ${g.removed.map(inlineCode).join('、')}`)
+      for (const r of g.renamed) parts.push(`引用方改名 ${inlineCode(r.from)} → ${inlineCode(r.to)}`)
       lines.push(`  - ${brief(g.commit)}：${parts.join('；')}`)
     }
     if (h.lostRef) lines.push(`  - 失去引用：${oneLine(full(h.lostRef))}`)

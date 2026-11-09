@@ -1,7 +1,7 @@
 /**
  * history 模块对外的入口：把引入、时间线、失去引用组合成 schema 里的 History 结构
  */
-import { traceOrigin } from './introduced.js'
+import { findBranchIntroduced, traceOrigin } from './introduced.js'
 import { buildTimeline, findLostRef } from './refs.js'
 import { DEFAULT_CONFIG } from '../core/config.js'
 
@@ -33,17 +33,22 @@ export function traceHistory({ root, file, pattern, rev = 'HEAD', config = DEFAU
     )
   }
 
-  const timeline = buildTimeline(root, usedPattern, { rev, exclude: paths, extensions: config.extensions })
+  const timeline = buildTimeline(root, usedPattern, { rev, exclude: paths, extensions: config.extensions, aliases: config.aliases })
   const lostRef = findLostRef(timeline)
 
-  return { pattern: usedPattern, paths, history: { introduced, lostRef, timeline, paths, pattern: usedPattern } }
+  // 引入的是合并提交：补上分支上真正新增这个文件的提交
+  const introducedFrom = findBranchIntroduced(root, introduced.hash, origin)
+  const history = { introduced, lostRef, timeline, paths, pattern: usedPattern }
+  if (introducedFrom) history.introducedFrom = introducedFrom
+
+  return { pattern: usedPattern, paths, history }
 }
 
 /**
  * 从文件路径推一个默认的 pattern：去掉源码根目录、扩展名，以及末尾的 /index
  * 例（sourceRoots 为 ['src']）：
  *   src/utils/math.js           → utils/math
- *   src/utils/relayout/index.js → utils/relayout（引用目录时不写 index）
+ *   src/lib/layout/index.js → lib/layout（引用目录时不写 index）
  * 文件名里的空格保留：如果当年代码里就是带着空格引用的，去掉反而搜不到
  *
  * 文件不在任何源码根目录下时返回 null，不猜：

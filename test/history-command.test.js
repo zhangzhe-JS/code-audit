@@ -75,7 +75,7 @@ test('defaultPattern：去掉源码根目录（默认 src）和扩展名', () =>
   assert.equal(defaultPattern('src/views/Home.vue'), 'views/Home')
   assert.equal(defaultPattern('src/lib/a.b.js'), 'lib/a.b') // 只去掉最后一个扩展名
   assert.equal(defaultPattern('src/utils/ setting.js'), 'utils/ setting') // 空格保留，当年就是这么引用的
-  assert.equal(defaultPattern('src/utils/relayout/index.js'), 'utils/relayout') // 引用目录时不写 index
+  assert.equal(defaultPattern('src/lib/layout/index.js'), 'lib/layout') // 引用目录时不写 index
 })
 
 // ---------- 命令行 ----------
@@ -369,15 +369,15 @@ test('引用匹配按完整路径：utils/math 不匹配 utils/mathHelper，但�
   t.after(() => repo.cleanup())
 
   repo.write('src/utils/math.js', 'export const m = 1\n')
-  repo.write('src/utils/relayout/index.js', 'export const r = 1\n')
+  repo.write('src/lib/layout/index.js', 'export const r = 1\n')
   repo.write('src/utils/mathHelper.js', 'export const h = 1\n')
   repo.commit('init', { date: '2024-01-01' })
   repo.write('src/a.js', "import { m } from './utils/math.js'\n")
-  repo.write('src/b.js', "import { r } from '@/utils/relayout/index.js'\n")
+  repo.write('src/b.js', "import { r } from '@/lib/layout/index.js'\n")
   repo.write('src/c.js', "import { h } from '@/utils/mathHelper'\n")
   repo.commit('各种引用写法', { date: '2024-02-01' })
 
   const from = (file) => traceHistory({ root: repo.root, file }).history.timeline.map((e) => e.from)
   assert.deepEqual(from('src/utils/math.js'), ['src/a.js'])
-  assert.deepEqual(from('src/utils/relayout/index.js'), ['src/b.js'])
+  assert.deepEqual(from('src/lib/layout/index.js'), ['src/b.js'])
 })

@@ -84,3 +84,52 @@ export function lineAt(code, index) {
   for (let i = 0; i < index; i++) if (code[i] === '\n') line++
   return line
 }
+
+/**
+ * 代码里字符串、模板字符串所在的位置（模板字符串里 ${} 中间是代码，不算）
+ * 用来跳过写在字符串里的 import(、require(：那是文字，不是调用。代码要先去掉注释
+ * @param {string} code
+ * @returns {(index: number) => boolean} 这个位置在不在字符串里
+ */
+export function inStringAt(code) {
+  const ranges = []
+  const scan = (i, quote) => {
+    // 从引号后面开始，返回字符串结束后的位置；模板字符串里的 ${} 递归跳过
+    let start = i
+    while (i < code.length) {
+      const c = code[i]
+      if (c === '\\') i += 2
+      else if (c === quote) {
+        ranges.push([start, i])
+        return i + 1
+      } else if (quote === '`' && c === '$' && code[i + 1] === '{') {
+        ranges.push([start, i])
+        i = skipCode(i + 2, true)
+        start = i
+      } else if (c === '\n' && quote !== '`') {
+        ranges.push([start, i])
+        return i
+      } else i++
+    }
+    ranges.push([start, code.length])
+    return code.length
+  }
+  const skipCode = (i, inTemplate) => {
+    let depth = 0
+    while (i < code.length) {
+      const c = code[i]
+      if (c === "'" || c === '"' || c === '`') i = scan(i + 1, c)
+      else if (inTemplate && c === '{') {
+        depth++
+        i++
+      } else if (inTemplate && c === '}') {
+        if (depth === 0) return i + 1
+        depth--
+        i++
+      } else i++
+    }
+    return i
+  }
+  skipCode(0, false)
+  return (index) => ranges.some(([a, b]) => index >= a && index < b)
+}

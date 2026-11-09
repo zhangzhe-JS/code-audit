@@ -125,3 +125,24 @@ test('原文里已经有 \\| 或反斜杠时，表格列数也不变', () => {
   const row = t.split('\n')[2]
   assert.equal(countDelimiters(row), 7)
 })
+
+test('表格里的提交说明按 tableSubjectMaxLength 截断；null 不截断', () => {
+  const lost = { hash: 'd'.repeat(40), date: '2024-03-01', author: 'bob', subject: "Merge branch 'feature/very-long-name' into 'dev' (http://git.example.com/group/project/merge_requests/1234)" }
+  const it = {
+    id: 'file:src/a.js',
+    kind: 'file',
+    target: 'src/a.js',
+    status: 'dead',
+    evidence: [{ rule: 'no-ref', detail: 'x' }],
+    refs: [],
+    history: { introduced: lost, lostRef: lost, timeline: [] },
+    verify: null
+  }
+  const short = renderQuarantineTable([it], { config: resolveConfig({ tableColumns: ['target', 'lostRef'] }) })
+  const subject = short.match(/「(.*)」/)[1]
+  assert.equal(subject.length, 40)
+  assert.ok(subject.startsWith("Merge branch 'feature/") && subject.endsWith('…'))
+  const full = renderQuarantineTable([it], { config: resolveConfig({ tableColumns: ['target', 'lostRef'], tableSubjectMaxLength: null }) })
+  assert.match(full, /merge_requests\/1234\)」/)
+  assert.throws(() => resolveConfig({ tableSubjectMaxLength: 2 }), /tableSubjectMaxLength 必须是不小于 4 的整数/)
+})

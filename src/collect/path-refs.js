@@ -11,14 +11,17 @@ import { posix } from 'node:path'
 import { codeOf, lineAt } from './source-text.js'
 
 /**
- * 注释里的路径换成相对仓库根目录的路径（不带结尾的 /）；不像路径的返回 null
+ * 代码、注释里的路径换成相对仓库根目录的路径（不带结尾的 /）；不像路径的返回 null
  * @param {string} spec
  * @param {string} from
  * @param {Record<string, string>} aliases
+ * @param {{text?: boolean}} [opts] text：spec 来自注释、报错这类文字时为 true，带空格的当成一句话不当路径；
+ *   import 里的路径不设（文件名真有带空格的）
  */
-export function resolveSpec(spec, from, aliases) {
-  let p = spec.trim().replace(/[?#].*$/, '')
-  if (p === '' || /\s/.test(p) || /^[a-z]+:/i.test(p)) return null // 带空格的是文字，http: 等是网址
+export function resolveSpec(spec, from, aliases, { text = false } = {}) {
+  let p = spec.replace(/[?#].*$/, '')
+  if (text) p = p.trim()
+  if (p.trim() === '' || (text && /\s/.test(p)) || /^[a-z]+:/i.test(p)) return null // 文字里带空格的是句子，http: 等是网址
   if (p.startsWith('./') || p.startsWith('../')) {
     p = posix.join(posix.dirname(from), p)
   } else {
@@ -49,7 +52,7 @@ export function buildLookup(targets) {
 }
 
 /** import x from 'a'、import 'a'、export { x } from 'a'、import('a')、require('a') 里的路径 */
-const IMPORT_SPEC = /\b(?:from|import)\s*\(?\s*(['"`])([^'"`\n]+)\1|\brequire\s*\(\s*(['"`])([^'"`\n]+)\3/g
+export const IMPORT_SPEC = /\b(?:from|import)\s*\(?\s*(['"`])([^'"`\n]+)\1|\brequire\s*\(\s*(['"`])([^'"`\n]+)\3/g
 
 /**
  * @typedef {object} ImportRef

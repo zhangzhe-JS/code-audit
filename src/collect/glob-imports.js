@@ -8,11 +8,10 @@
  * scan 把它们当成确定不了目录的动态加载，按 glob 的模式在全仓库里圈文件，圈到的判 unknown，不当成没人用
  * require.context、拼接路径的 import() 由 dynamic-imports.js 处理
  *
- * 已知限制：
- * - 写 import.meta.glob 的文件本身没人用时，它加载的文件也会被当成在用（少报，不会误删）
+ * 写 import.meta.glob 的文件本身没人用时，scan 会拿掉它的 glob 重新分析：它加载的文件不算在用，跟着它判 dead-only-ref
  */
 import { posix } from 'node:path'
-import { codeOf, lineAt, readString, skipSpace } from './source-text.js'
+import { codeOf, inStringAt, lineAt, readString, skipSpace } from './source-text.js'
 
 /**
  * @typedef {object} GlobImport
@@ -44,8 +43,10 @@ export function findGlobImports({ files, aliases = {} }) {
   for (const { path, content } of files) {
     if (!content.includes('import.meta.glob')) continue
     const code = codeOf(path, content)
+    const inString = inStringAt(code)
 
     for (const m of code.matchAll(/import\.meta\.glob(?:Eager)?\s*\(/g)) {
+      if (inString(m.index)) continue // 写在字符串里的：是文字，不是调用
       const line = lineAt(code, m.index)
       const args = readLiterals(code, m.index + m[0].length)
       const end = code.indexOf(')', m.index)

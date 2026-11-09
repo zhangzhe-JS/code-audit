@@ -1,10 +1,10 @@
 /**
- * Vue 全局注册的组件：模板里直接写 <BasicTable>，不用 import
+ * Vue 全局注册的组件：模板里直接写 <UserCard>，不用 import
  *
  * unplugin-vue-components 等会生成一个声明文件（常见名字 components.d.ts）：
  *   declare module 'vue' {
  *     export interface GlobalComponents {
- *       BasicTable: (typeof import('./components/BasicTable/index.vue'))['default']
+ *       UserCard: (typeof import('./components/UserCard/index.vue'))['default']
  *     }
  *   }
  * 有两个问题：
@@ -14,9 +14,9 @@
  * 做法：
  * - 认出声明文件（.d.ts 里有 interface GlobalComponents），读出「组件名 → 文件」，scan 的临时目录里不放这个声明文件
  * - 在各个 .vue 里找用法，记下哪个文件哪一行用了哪个组件（模板里的 HTML 注释、脚本里的注释不算）：
- *     标签                <BasicTable>、<basic-table>
- *     动态组件写死的名字   <component is="BasicTable">、is="vue:BasicTable"、:is="'BasicTable'"
- *     脚本里按名字取       resolveComponent('BasicTable')
+ *     标签                <UserCard>、<user-card>
+ *     动态组件写死的名字   <component is="UserCard">、is="vue:UserCard"、:is="'UserCard'"
+ *     脚本里按名字取       resolveComponent('UserCard')
  * - 在临时目录的拷贝里，给用到标签的文件补上 import（插在 <script> 那一行，行号不变），knip 就能顺着真实的引用关系走：
  *   只被没人用的页面用到的组件，照样判为没人用
  *
@@ -140,7 +140,7 @@ export function templateOnly(content) {
   return content.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, blank).replace(/<!--[\s\S]*?-->/g, blank)
 }
 
-/** BasicTable → basic-table */
+/** UserCard → user-card */
 export function kebab(name) {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').replace(/([A-Z])([A-Z][a-z])/g, '$1-$2').toLowerCase()
 }
@@ -232,7 +232,7 @@ export function findSameNameTags({ files, targets }) {
   return { used, commented }
 }
 
-/** 从路径推组件名：BasicModal.vue → BasicModal；basic-modal/index.vue → BasicModal；index.vue 在根目录时推不出 */
+/** 从路径推组件名：UserCard.vue → UserCard；user-card/index.vue → UserCard；index.vue 在根目录时推不出 */
 export function componentName(file) {
   const parts = file.split('/')
   let base = parts.at(-1).replace(/\.vue$/, '')

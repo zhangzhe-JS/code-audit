@@ -16,7 +16,7 @@
  * 宁可多圈：这类加载圈到的候选都判 unknown，除非人工确认过（配置 reviewedDynamicLoads）
  */
 import { resolvePattern } from './glob-imports.js'
-import { codeOf, lineAt, readString } from './source-text.js'
+import { codeOf, inStringAt, lineAt, readString } from './source-text.js'
 
 /**
  * @typedef {object} DynamicLoad
@@ -55,7 +55,9 @@ export function findDynamicLoads({ files, aliases = {} }) {
   for (const { path, content } of files) {
     if (!/\b(import|require)\b/.test(content)) continue
     const code = codeOf(path, content)
+    const inString = inStringAt(code)
     for (const m of code.matchAll(CALLS)) {
+      if (inString(m.index)) continue // 写在字符串里的 import(、require(：是文字，不是调用
       const call = readArgs(code, m.index + m[0].length)
       if (call === null || call.args.length === 0) continue
       const kind = m[1]

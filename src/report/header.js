@@ -45,12 +45,14 @@ export function renderHeader(item, { config = DEFAULT_CONFIG, movedAt, branch, m
   ]
   if (movedAt) lines.push(`移入：${movedAt}${branch ? `（分支 ${branch}）` : ''}`)
   lines.push(`引入：${full(h.introduced)}`)
+  if (h.introducedFrom) lines.push(`  分支上新增：${full(h.introducedFrom)}`)
 
   lines.push('引用历史：')
   for (const g of groupTimeline(h.timeline)) {
     const parts = []
     if (g.added.length > 0) parts.push(`新增引用 ${listFiles(g.added, maxFiles)}`)
     if (g.removed.length > 0) parts.push(`去掉引用 ${listFiles(g.removed, maxFiles)}`)
+    for (const r of g.renamed) parts.push(`引用方改名 ${r.from} → ${r.to}`)
     lines.push(`  - ${brief(g.commit)}：${parts.join('；')}`)
   }
   if (h.lostRef) lines.push(`  - 失去引用：${full(h.lostRef)}`)

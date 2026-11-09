@@ -129,3 +129,30 @@ test('branches 配置：默认都查；写错时报错', () => {
   assert.throws(() => resolveConfig({ branches: { maxAgeDays: 0 } }), /maxAgeDays 必须是正整数/)
   assert.throws(() => resolveConfig({ branches: { only: [] } }), /branches 里不认识的字段：only/)
 })
+
+test('findBranchRefs：已经 cherry-pick 到当前分支的改动不算 pending；没摘过来的照常算', (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/main.js', '')
+  for (const f of ['x', 'y']) repo.write(`src/${f}.js`, `export const ${f} = 1\n`)
+  repo.commit('init', { date: '2024-01-01' })
+  repo.run(['checkout', '-q', '-b', 'hotfix'])
+  repo.write('src/fix.js', "import { x } from './x.js'\n")
+  const picked = repo.commit('fix uses x', { date: '2024-02-01' })
+  repo.write('src/other.js', "import { y } from './y.js'\n")
+  repo.commit('other uses y', { date: '2024-02-02' })
+  repo.run(['checkout', '-q', 'main'])
+  repo.run(['cherry-pick', picked])
+  repo.write('src/fix.js', '') // 主线后来又不用 x 了
+  repo.commit('main drops x', { date: '2024-03-01' })
+
+  const r = findBranchRefs({
+    root: repo.root,
+    rev: repo.run(['rev-parse', 'HEAD']),
+    targets: ['src/x.js', 'src/y.js'],
+    extensions: ['.js'],
+    branches: resolveConfig({}).branches
+  })
+  assert.equal(r.refs.has('src/x.js'), false) // fix.js 的改动摘过来了
+  assert.deepEqual(r.refs.get('src/y.js').map((x) => [x.branch, x.from]), [['hotfix', 'src/other.js']])
+})

@@ -35,7 +35,7 @@ export function locate({ newLines, newFailures, deleted, aliases = {}, readFile 
     const paths = [...line.matchAll(SOURCE_PATH)].map((m) => m[1])
     // 1. 直接写着路径
     for (const p of paths) {
-      const r = resolveSpec(p.startsWith('.') || p.startsWith('/') ? p : `/${p}`, '', aliases)
+      const r = resolveSpec(p.startsWith('.') || p.startsWith('/') ? p : `/${p}`, '', aliases, { text: true })
       if (r !== null) hit(r)
     }
     // 2. 引号里的 import 路径，按同一行里的引用方解析；没有引用方时按别名、仓库根目录解析
@@ -43,7 +43,7 @@ export function locate({ newLines, newFailures, deleted, aliases = {}, readFile 
       const spec = m[2]
       const importers = paths.filter((p) => p !== spec)
       for (const from of importers.length > 0 ? importers : ['']) {
-        const r = resolveSpec(spec, from.replace(/^\.?\//, ''), aliases)
+        const r = resolveSpec(spec, from.replace(/^\.?\//, ''), aliases, { text: true })
         if (r !== null) hit(r)
       }
     }

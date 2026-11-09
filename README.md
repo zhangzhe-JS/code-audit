@@ -6,7 +6,9 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）：除「文件内部在用」（`internal`，属于导出维度）外，8 种状态都能判出并写明原因。M5（verify）：能在临时目录里删掉候选、和基线比较。进度见 `docs/progress.md`。
+> 状态：**文件维度可用**（0.1.0）：scan → history → verify → report → quarantine 全流程跑通，在 Vue2 + JS、Vue3 + TS 两类项目上验证过。
+> 8 种状态都能判出并写明原因（`internal` 属于导出维度，以后做）；看不准的不判死。导出维度、接口维度往后放。进度见 `docs/progress.md`。
+> 通用方案：项目差异只写在配置里，代码不针对任何具体项目。目前只支持 Vue（.vue 单文件组件、Vue 的全局组件约定）
 
 ---
 
@@ -120,9 +122,20 @@ code-audit/
 
 ## 用法
 
-### 已经可以用的：scan + history + report
+### 安装
 
-**安装**：在 code-audit 目录运行 `npm install`，会连带装上 knip（可选依赖，只有 scan 用到；需要 Node 20.19 或 22.12 以上）。
+打包成 tgz 分发（`package.json` 里是 `private: true`，不会误发到公共 npm 源）：
+
+```bash
+npm pack                                     # 在 code-audit 目录生成 code-audit-<版本>.tgz（只含 bin、src、示例配置、README）
+npm install -g ./code-audit-0.1.0.tgz        # 装成全局命令；也可以装进某个工具目录：npm install ./code-audit-0.1.0.tgz
+code-audit --help
+```
+
+安装时会连带装上 knip（可选依赖，只有 scan 用到；需要 Node 20.19 或 22.12 以上），**不装进被分析的项目**。
+不想装的话，也可以在 code-audit 目录 `npm install` 后直接用 `node bin/code-audit.js`。下面的例子都用这种写法，装成命令后把 `node bin/code-audit.js` 换成 `code-audit` 即可。
+
+### 用法
 
 **1. 写项目配置**（复制 `profiles/example.js`），scan 至少要写入口：
 
@@ -165,7 +178,7 @@ branches: { ignore: ['origin/release/**'], maxAgeDays: 180 }  // 默认都查
 
 只有测试用到的判为 `test-only`，列出引用它的测试。候选之间的 import 会顺着传递：被要保留的文件（如 external）引用的，跟着保留；只被同样没人用的文件引用的，判为 `dead-only-ref`，跟着引用方一起处理。
 
-Vue 全局注册的组件（unplugin-vue-components 生成的 `components.d.ts` 等，里面有 `interface GlobalComponents`）：模板里写标签就能用，不用 import。scan 读出登记的组件，按模板里的标签（`<BasicTable>`、`<basic-table>`）、写死名字的动态组件（`is="X"`、`:is="'X'"`）和 `resolveComponent('X')` 认出用法，交给 knip；声明文件本身、注释里的不算。名字是变量的（`:is="name"`）认不出。
+Vue 全局注册的组件（unplugin-vue-components 生成的 `components.d.ts` 等，里面有 `interface GlobalComponents`）：模板里写标签就能用，不用 import。scan 读出登记的组件，按模板里的标签（`<UserCard>`、`<user-card>`）、写死名字的动态组件（`is="X"`、`:is="'X'"`）和 `resolveComponent('X')` 认出用法，交给 knip；声明文件本身、注释里的不算。名字是变量的（`:is="name"`）认不出。
 
 **盲区兜底：看不准的不判死。** 静态分析有认不出的写法（动态组件名字是变量、全局注册没有声明文件、别名没配置的 glob、自动导入、拼出来的路径等）。scan 会先认出这些盲区，可能受影响的候选判 `unknown`（注释里出现的判 `dormant`），证据写明看到了什么、为什么不能确认。动态加载类的盲区，人工确认后写进 `reviewedDynamicLoads` 才放过。明细见 `docs/progress.md` 的「盲区兜底」。
 
@@ -307,4 +320,5 @@ git status --short       # 确认列表里没有上面这些目录
 | M4 | 规则层：注释停用、动态调用、文件内调用链 |
 | M5 | verify 模块 |
 | M6 | 接入第二个项目（Vue3 + TS） |
-| M7 | 接口维度、quarantine、打包成 tgz |
+| M7 | quarantine、打包成 tgz（0.1.0） |
+| 以后 | 导出维度（含 internal）、接口维度、是否接入大模型分析 |

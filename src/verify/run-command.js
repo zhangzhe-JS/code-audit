@@ -1,7 +1,7 @@
 /**
  * 在工作目录里跑一条项目配置的命令（构建、测试）
  *
- * - 命令来自 profile，按 shell 命令执行（可以写 "pnpm run build:ci"、"npm test -- --run" 等）
+ * - 命令来自 profile，按 shell 命令执行（可以写 "npm run build"、"pnpm test -- --run" 等）
  * - 设 CI=1：大多数工具在 CI 模式下不会停下来等人输入；关掉颜色，日志才好比较
  * - 超时：连同它启动的子进程一起结束（pnpm → node → vite 是一串进程，只结束 shell 会留下孤儿进程）
  * - 输出可能很长：

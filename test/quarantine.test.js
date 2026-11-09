@@ -19,7 +19,7 @@ const cli = (...args) => spawnSync(process.execPath, [bin, ...args], { encoding:
 
 /**
  * 小项目：
- * - src/utils/canvas/Rect.js 引用同目录的 Vector2.js（一组）和 ../../api/user.js（在用）
+ * - src/utils/chart/Area.js 引用同目录的 Point.js（一组）和 ../../api/user.js（在用）
  * - src/utils/old.js：dead，验证通过
  * - src/utils/unverified.js：dead，没验证
  * - src/utils/failed.js：dead，验证没通过
@@ -31,8 +31,8 @@ function projectRepo() {
   const repo = createRepo()
   repo.write('src/main.js', "import './api/user.js'\n")
   repo.write('src/api/user.js', 'export const u = 1\n')
-  repo.write('src/utils/canvas/Rect.js', "import { V } from './Vector2.js'\nimport { u } from '../../api/user.js'\nexport const R = [V, u]\n")
-  repo.write('src/utils/canvas/Vector2.js', 'export const V = 2\n')
+  repo.write('src/utils/chart/Area.js', "import { P } from './Point.js'\nimport { u } from '../../api/user.js'\nexport const S = [P, u]\n")
+  repo.write('src/utils/chart/Point.js', 'export const P = 2\n')
   repo.write('src/utils/old.js', '#!/usr/bin/env node\nconsole.log(1)\n')
   repo.write('src/utils/unverified.js', '')
   repo.write('src/utils/failed.js', '')
@@ -59,8 +59,8 @@ function dataFor(repo) {
     verify: v
   })
   const items = [
-    item('src/utils/canvas/Rect.js', 'dead', verify(true)),
-    item('src/utils/canvas/Vector2.js', 'dead-only-ref', verify(true), [{ from: 'src/utils/canvas/Rect.js', line: 1, via: 'static' }]),
+    item('src/utils/chart/Area.js', 'dead', verify(true)),
+    item('src/utils/chart/Point.js', 'dead-only-ref', verify(true), [{ from: 'src/utils/chart/Area.js', line: 1, via: 'static' }]),
     item('src/utils/old.js', 'dead', verify(true)),
     item('src/utils/unverified.js', 'dead', null),
     item('src/utils/failed.js', 'dead', verify(false)),
@@ -87,8 +87,8 @@ test('buildPlan（集中）：只隔离 dead / dead-only-ref、验证通过、�
   t.after(() => repo.cleanup())
   const plan = planFor(repo)
   assert.deepEqual(plan.moves.map((m) => [m.from, m.to]), [
-    ['src/utils/canvas/Rect.js', 'src/utils/_deprecated/canvas/Rect.js'],
-    ['src/utils/canvas/Vector2.js', 'src/utils/_deprecated/canvas/Vector2.js'],
+    ['src/utils/chart/Area.js', 'src/utils/_deprecated/chart/Area.js'],
+    ['src/utils/chart/Point.js', 'src/utils/_deprecated/chart/Point.js'],
     ['src/utils/data.json', 'src/utils/_deprecated/data.json'],
     ['src/utils/old.js', 'src/utils/_deprecated/old.js']
   ])
@@ -99,7 +99,7 @@ test('buildPlan（集中）：只隔离 dead / dead-only-ref、验证通过、�
     { file: 'src/utils/unverified.js', reason: '没有实删验证（先跑 verify）' }
   ])
   const rect = plan.moves[0]
-  assert.deepEqual(rect.changes, [{ line: 2, before: '../../api/user.js', after: '@/api/user.js' }]) // 同一组的 ./Vector2.js 不用改
+  assert.deepEqual(rect.changes, [{ line: 2, before: '../../api/user.js', after: '@/api/user.js' }]) // 同一组的 ./Point.js 不用改
   assert.match(rect.header, /^\/\*\*\n \* \[DEPRECATED\] 已隔离/)
   assert.equal(plan.moves[2].header, null) // .json 不能写注释
   assert.match(plan.moves[2].headerSkipped, /不支持为 \.json 文件生成头注释/)
@@ -111,12 +111,12 @@ test('buildPlan：一组里有一个不能移，整组都不移；隔离区里�
   const repo = projectRepo()
   t.after(() => repo.cleanup())
   const data = dataFor(repo)
-  data.items.find((i) => i.target === 'src/utils/canvas/Vector2.js').verify.passed = false
+  data.items.find((i) => i.target === 'src/utils/chart/Point.js').verify.passed = false
   repo.write('src/utils/_deprecated/old.js', '')
   repo.commit('占位')
   const plan = planFor(repo, data)
   assert.deepEqual(plan.moves.map((m) => m.from), ['src/utils/data.json'])
-  assert.match(plan.skipped.find((s) => s.file === 'src/utils/canvas/Rect.js').reason, /和 src\/utils\/canvas\/Vector2\.js 互相引用，要一起移/)
+  assert.match(plan.skipped.find((s) => s.file === 'src/utils/chart/Area.js').reason, /和 src\/utils\/chart\/Point\.js 互相引用，要一起移/)
   assert.match(plan.skipped.find((s) => s.file === 'src/utils/old.js').reason, /新位置已经有同名文件/)
 
   const central = buildPlan({ data: dataFor(repo), config: resolveConfig({ quarantine: { layout: 'central' } }), files: repo.run(['ls-files']).split('\n'), readFile: () => '', movedAt: '2026-11-09' })
@@ -170,7 +170,7 @@ test('readmeContent：没有就新建；已有的原样保留，在最后追加�
   const created = readmeContent(null, plan.readmes[0], { config, movedAt: '2026-11-09', branch: 'qb' })
   assert.match(created, /^# src\/utils\/_deprecated（隔离区）/)
   assert.match(created, /## 2026-11-09 隔离（code-audit，分支 qb）/)
-  assert.match(created, /\| src\/utils\/_deprecated\/canvas\/Rect\.js \| src\/utils\/canvas\/Rect\.js \|/)
+  assert.match(created, /\| src\/utils\/_deprecated\/chart\/Area\.js \| src\/utils\/chart\/Area\.js \|/)
   const appended = readmeContent('# 人工写的\n\n## 已恢复\n\n（暂无）\n\n\n', plan.readmes[0], { config, movedAt: '2026-11-09', branch: 'qb' })
   assert.ok(appended.startsWith('# 人工写的\n\n## 已恢复\n\n（暂无）\n\n## 2026-11-09 隔离'))
 })
@@ -190,7 +190,7 @@ test('quarantine 命令：不带 --apply 只打印计划，什么都不改', (t)
   const r = cli('quarantine', '--root', repo.root, '--profile', join(dir, 'p.js'), '--in', join(dir, 'data.json'), '--moved-at', '2026-11-09')
   assert.equal(r.status, 0, r.stderr)
   assert.match(r.stderr, /要隔离 4 个文件/)
-  assert.match(r.stderr, /src\/utils\/canvas\/Rect\.js → src\/utils\/_deprecated\/canvas\/Rect\.js/)
+  assert.match(r.stderr, /src\/utils\/chart\/Area\.js → src\/utils\/_deprecated\/chart\/Area\.js/)
   assert.match(r.stderr, /第 2 行：\.\.\/\.\.\/api\/user\.js → @\/api\/user\.js/)
   assert.match(r.stderr, /不隔离 4 个/)
   assert.match(r.stderr, /只是计划，没有改任何东西/)
@@ -212,18 +212,18 @@ test('buildPlan（就近，默认）：放进文件所在目录下的 _deprecate
   const plan = planFor(repo, dataFor(repo), nearby)
   assert.equal(plan.layout, 'nearby')
   assert.deepEqual(plan.moves.map((m) => [m.from, m.to]), [
-    ['src/utils/canvas/Rect.js', 'src/utils/canvas/_deprecated/Rect.js'],
-    ['src/utils/canvas/Vector2.js', 'src/utils/canvas/_deprecated/Vector2.js'],
+    ['src/utils/chart/Area.js', 'src/utils/chart/_deprecated/Area.js'],
+    ['src/utils/chart/Point.js', 'src/utils/chart/_deprecated/Point.js'],
     ['src/utils/data.json', 'src/utils/_deprecated/data.json'],
     ['src/utils/old.js', 'src/utils/_deprecated/old.js'],
     ['src/other/x.js', 'src/other/_deprecated/x.js']
   ].sort((a, b) => (a[0] < b[0] ? -1 : 1)))
-  // 一组里两个文件在同一个目录：挪过去还在一起，./Vector2.js 不用改；../../api/user.js 改成别名
-  assert.deepEqual(plan.moves.find((m) => m.from === 'src/utils/canvas/Rect.js').changes, [{ line: 2, before: '../../api/user.js', after: '@/api/user.js' }])
+  // 一组里两个文件在同一个目录：挪过去还在一起，./Point.js 不用改；../../api/user.js 改成别名
+  assert.deepEqual(plan.moves.find((m) => m.from === 'src/utils/chart/Area.js').changes, [{ line: 2, before: '../../api/user.js', after: '@/api/user.js' }])
   assert.deepEqual(plan.readmes.map((r) => [r.path, r.moves.length]), [
     ['src/other/_deprecated/README.md', 1],
     ['src/utils/_deprecated/README.md', 2],
-    ['src/utils/canvas/_deprecated/README.md', 2]
+    ['src/utils/chart/_deprecated/README.md', 2]
   ])
   assert.deepEqual(plan.lintHints, ['.eslintignore 里加一行：**/_deprecated/**'])
   assert.match(plan.skipped.find((x) => x.file === 'src/utils/_deprecated/prev.js').reason, /已经隔离过/)
@@ -232,14 +232,14 @@ test('buildPlan（就近，默认）：放进文件所在目录下的 _deprecate
 test('buildPlan（就近）：挪过去以后会被 import.meta.glob / require.context 重新加载的不移，写明是哪一处', (t) => {
   const repo = projectRepo()
   t.after(() => repo.cleanup())
-  // utils 下的 js 会被 require.context 递归加载、canvas 下的会被 glob 加载（old.js、Rect.js 现在不在范围里：它们在 utils 根下但不匹配）
-  repo.write('src/main.js', "import './api/user.js'\nconst ctx = require.context('./utils/_deprecated', false, /\\.js$/)\nconst m = import.meta.glob('./utils/canvas/*/*.js')\n")
+  // utils 下的 js 会被 require.context 递归加载、chart 下的会被 glob 加载（old.js、Area.js 现在不在范围里：它们在 utils 根下但不匹配）
+  repo.write('src/main.js', "import './api/user.js'\nconst ctx = require.context('./utils/_deprecated', false, /\\.js$/)\nconst m = import.meta.glob('./utils/chart/*/*.js')\n")
   repo.commit('批量加载')
   const plan = planFor(repo, dataFor(repo), nearby)
   const reason = (f) => plan.skipped.find((x) => x.file === f)?.reason ?? ''
   assert.match(reason('src/utils/old.js'), /挪到 src\/utils\/_deprecated\/old\.js 以后会被 src\/main\.js:2 的 require\.context\(.*\) 重新加载，不能放这里/)
-  assert.match(reason('src/utils/canvas/Rect.js'), /会被 src\/main\.js:3 的 import\.meta\.glob\('\.\/utils\/canvas\/\*\/\*\.js'\) 重新加载/)
-  assert.match(reason('src/utils/canvas/Vector2.js'), /会被 src\/main\.js:3 的 import\.meta\.glob/) // 自己也会被圈到：写自己的原因
+  assert.match(reason('src/utils/chart/Area.js'), /会被 src\/main\.js:3 的 import\.meta\.glob\('\.\/utils\/chart\/\*\/\*\.js'\) 重新加载/)
+  assert.match(reason('src/utils/chart/Point.js'), /会被 src\/main\.js:3 的 import\.meta\.glob/) // 自己也会被圈到：写自己的原因
   assert.equal(plan.moves.some((m) => m.from === 'src/utils/data.json'), true) // .json 不在 require.context 的 /\.js$/ 里
 })
 
@@ -275,28 +275,28 @@ test('applyPlan：只改工作区——改名用 git mv 暂存好，头注释、
   assert.equal(repo.run(['branch', '--list']).trim(), '* main')
 
   assert.deepEqual(r.moved.map((m) => m.to), [
-    'src/utils/_deprecated/canvas/Rect.js',
-    'src/utils/_deprecated/canvas/Vector2.js',
+    'src/utils/_deprecated/chart/Area.js',
+    'src/utils/_deprecated/chart/Point.js',
     'src/utils/_deprecated/data.json',
     'src/utils/_deprecated/old.js'
   ])
-  assert.deepEqual(r.rewrites, [{ file: 'src/utils/_deprecated/canvas/Rect.js', line: 2, before: '../../api/user.js', after: '@/api/user.js' }])
-  assert.deepEqual(r.headers.sort(), ['src/utils/_deprecated/canvas/Rect.js', 'src/utils/_deprecated/canvas/Vector2.js', 'src/utils/_deprecated/old.js'])
+  assert.deepEqual(r.rewrites, [{ file: 'src/utils/_deprecated/chart/Area.js', line: 2, before: '../../api/user.js', after: '@/api/user.js' }])
+  assert.deepEqual(r.headers.sort(), ['src/utils/_deprecated/chart/Area.js', 'src/utils/_deprecated/chart/Point.js', 'src/utils/_deprecated/old.js'])
   assert.deepEqual(r.readmes, [{ path: 'src/utils/_deprecated/README.md', created: true }])
 
   // 暂存区里只有改名（内容不变）
   const staged = repo.run(['diff', '--cached', '--name-status', '-M']).split('\n').sort()
   assert.deepEqual(staged, [
-    'R100\tsrc/utils/canvas/Rect.js\tsrc/utils/_deprecated/canvas/Rect.js',
-    'R100\tsrc/utils/canvas/Vector2.js\tsrc/utils/_deprecated/canvas/Vector2.js',
+    'R100\tsrc/utils/chart/Area.js\tsrc/utils/_deprecated/chart/Area.js',
+    'R100\tsrc/utils/chart/Point.js\tsrc/utils/_deprecated/chart/Point.js',
     'R100\tsrc/utils/data.json\tsrc/utils/_deprecated/data.json',
     'R100\tsrc/utils/old.js\tsrc/utils/_deprecated/old.js'
   ])
   // 其余改动在工作区：头注释、路径改了，README 是新文件
   const unstaged = repo.run(['diff', '--name-only']).split('\n').sort()
-  assert.deepEqual(unstaged, ['src/utils/_deprecated/canvas/Rect.js', 'src/utils/_deprecated/canvas/Vector2.js', 'src/utils/_deprecated/old.js'])
+  assert.deepEqual(unstaged, ['src/utils/_deprecated/chart/Area.js', 'src/utils/_deprecated/chart/Point.js', 'src/utils/_deprecated/old.js'])
   assert.match(repo.run(['status', '--porcelain']), /\?\? src\/utils\/_deprecated\/README\.md/)
-  const rect = readFileSync(join(repo.root, 'src/utils/_deprecated/canvas/Rect.js'), 'utf8')
+  const rect = readFileSync(join(repo.root, 'src/utils/_deprecated/chart/Area.js'), 'utf8')
   assert.match(rect, /^\/\*\*\n \* \[DEPRECATED\] 已隔离/)
   assert.match(rect, /import \{ u \} from '@\/api\/user\.js'/)
   assert.ok(readFileSync(join(repo.root, 'src/utils/_deprecated/old.js'), 'utf8').startsWith('#!/usr/bin/env node\n/**'))
@@ -306,7 +306,7 @@ test('applyPlan：只改工作区——改名用 git mv 暂存好，头注释、
   repo.run(['commit', '-q', '-m', 'move'])
   repo.run(['add', '-A'])
   repo.run(['commit', '-q', '-m', 'headers'])
-  assert.match(repo.run(['log', '--follow', '--format=%s', '--', 'src/utils/_deprecated/canvas/Rect.js']), /init/)
+  assert.match(repo.run(['log', '--follow', '--format=%s', '--', 'src/utils/_deprecated/chart/Area.js']), /init/)
 })
 
 test('applyPlan：中途出错整体撤回——工作区、暂存区回到执行前，新建的 README 和空目录删掉', (t) => {
@@ -318,7 +318,7 @@ test('applyPlan：中途出错整体撤回——工作区、暂存区回到执�
   assert.throws(() => applyPlan({ root: repo.root, plan, config: nearby, movedAt: '2026-11-09' }), /隔离没有完成，已撤回/)
   assert.equal(repo.run(['status', '--porcelain', '--untracked-files=all']), '')
   assert.ok(existsSync(join(repo.root, 'src/utils/old.js')))
-  assert.equal(existsSync(join(repo.root, 'src/utils/canvas/_deprecated')), false)
+  assert.equal(existsSync(join(repo.root, 'src/utils/chart/_deprecated')), false)
   assert.equal(existsSync(join(repo.root, 'src/new-dir')), false)
 })
 
@@ -326,10 +326,10 @@ test('applyPlan（就近）：每个隔离目录一份 README；暂存区里全�
   const repo = projectRepo()
   t.after(() => repo.cleanup())
   const r = applyPlan({ root: repo.root, plan: planFor(repo, dataFor(repo), nearby), config: nearby, movedAt: '2026-11-09' })
-  assert.deepEqual(r.readmes.map((x) => x.path), ['src/other/_deprecated/README.md', 'src/utils/_deprecated/README.md', 'src/utils/canvas/_deprecated/README.md'])
+  assert.deepEqual(r.readmes.map((x) => x.path), ['src/other/_deprecated/README.md', 'src/utils/_deprecated/README.md', 'src/utils/chart/_deprecated/README.md'])
   assert.ok(repo.run(['diff', '--cached', '--name-status', '-M']).split('\n').every((l) => l.startsWith('R100\t')))
-  assert.match(readFileSync(join(repo.root, 'src/utils/canvas/_deprecated/README.md'), 'utf8'), /^# src\/utils\/canvas\/_deprecated（隔离区）/)
-  assert.match(readFileSync(join(repo.root, 'src/utils/canvas/_deprecated/Rect.js'), 'utf8'), /from '\.\/Vector2\.js'[\s\S]*from '@\/api\/user\.js'/)
+  assert.match(readFileSync(join(repo.root, 'src/utils/chart/_deprecated/README.md'), 'utf8'), /^# src\/utils\/chart\/_deprecated（隔离区）/)
+  assert.match(readFileSync(join(repo.root, 'src/utils/chart/_deprecated/Area.js'), 'utf8'), /from '\.\/Point\.js'[\s\S]*from '@\/api\/user\.js'/)
 })
 
 test('quarantine 命令：--apply 前检查工作区干净、提交对得上；通过后只改工作区，列出改了什么', (t) => {
@@ -357,7 +357,7 @@ test('quarantine 命令：--apply 前检查工作区干净、提交对得上；�
   assert.equal(ok.status, 0, ok.stderr)
   assert.match(ok.stderr, /隔离完成（只改了工作区，没有建分支、没有提交）/)
   assert.match(ok.stderr, /移动 4 个文件（git mv，改名已暂存）/)
-  assert.match(ok.stderr, /src\/utils\/_deprecated\/canvas\/Rect\.js 第 2 行：\.\.\/\.\.\/api\/user\.js → @\/api\/user\.js/)
+  assert.match(ok.stderr, /src\/utils\/_deprecated\/chart\/Area\.js 第 2 行：\.\.\/\.\.\/api\/user\.js → @\/api\/user\.js/)
   assert.match(ok.stderr, /接下来由开发人员审核后提交/)
   assert.equal(repo.run(['rev-parse', 'HEAD']), head)
   assert.equal(repo.run(['branch', '--list']).trim(), '* main')
@@ -372,5 +372,5 @@ test('applyPlan：写 README 时出错也整体撤回——已经新建的 READM
   plan.readmes.push({ dir: 'src/zzz/nope', path: 'src/zzz/nope/README.md', exists: false, moves: plan.readmes[0].moves })
   assert.throws(() => applyPlan({ root: repo.root, plan, config: nearby, movedAt: '2026-11-09' }), /隔离没有完成，已撤回/)
   assert.equal(repo.run(['status', '--porcelain', '--untracked-files=all']), '')
-  assert.equal(existsSync(join(repo.root, 'src/utils/canvas/_deprecated')), false)
+  assert.equal(existsSync(join(repo.root, 'src/utils/chart/_deprecated')), false)
 })

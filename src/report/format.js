@@ -67,12 +67,13 @@ export function groupTimeline(timeline) {
   for (const e of timeline) {
     let g = byHash.get(e.commit.hash)
     if (!g) {
-      g = { commit: e.commit, added: [], removed: [] }
+      g = { commit: e.commit, added: [], removed: [], renamed: [] }
       byHash.set(e.commit.hash, g)
       groups.push(g)
     }
     if (e.change === 'add') g.added.push(e.from)
     else if (e.change === 'remove') g.removed.push(e.from)
+    else if (e.change === 'rename') g.renamed.push({ from: e.previous, to: e.from })
     else throw new Error(`时间线里的 change 不合法：${e.change}`) // 不认识的值不能悄悄当成「去掉」
   }
 

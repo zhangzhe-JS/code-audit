@@ -28,7 +28,10 @@ export function renderQuarantineTable(items, { config = DEFAULT_CONFIG } = {}) {
 /** 每一列的内容怎么取：返回的是原始文本，统一在外面转义 */
 function buildCells(config) {
   const brief = (c) => formatCommit(c, { subject: false, hashLength: config.shortHashLength })
-  const full = (c) => formatCommit(c, { hashLength: config.shortHashLength })
+  // 表格里的提交说明按配置截断：合并提交的说明可能很长，会把列撑宽
+  const max = config.tableSubjectMaxLength
+  const cut = (s) => (max !== null && s.length > max ? `${s.slice(0, max - 1)}…` : s)
+  const full = (c) => formatCommit({ ...c, subject: cut(c.subject) }, { hashLength: config.shortHashLength })
 
   return {
     // id 去掉开头的类型：file:a.js → a.js，export:a.js#fn → a.js#fn，api:GET /x → GET /x
@@ -41,7 +44,12 @@ function buildCells(config) {
 
     status: (item) => `${item.status}（${config.statusLabels[item.status]}）`,
 
-    introduced: (item) => (item.history ? brief(item.history.introduced) : '未查询'),
+    // 引入是合并提交时，补上分支上真正写代码的人
+    introduced: (item) => {
+      const h = item.history
+      if (!h) return '未查询'
+      return h.introducedFrom ? `${brief(h.introduced)}（分支上 ${h.introducedFrom.author}）` : brief(h.introduced)
+    },
 
     lostRef: (item) => {
       const h = item.history

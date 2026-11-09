@@ -1,12 +1,18 @@
 {
   "name": "code-audit",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "前端删除排查工具：找出没人用的文件，查 git 历史，实删验证，输出报告，隔离",
+  "type": "module",
+  "private": true,
   "bin": {
     "code-audit": "./bin/code-audit.js"
   },
-  "type": "module",
-  "private": true,
+  "files": [
+    "bin",
+    "src",
+    "profiles/example.js",
+    "README.md"
+  ],
   "engines": {
     "node": ">=18"
   },

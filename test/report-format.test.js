@@ -59,8 +59,8 @@ test('groupTimeline：同一次提交的多条合成一组，保持时间顺序'
     { commit: c2, change: 'remove', from: 'src/b.vue' }
   ]
   assert.deepEqual(groupTimeline(timeline), [
-    { commit: c1, added: ['src/a.vue', 'src/b.vue'], removed: [] },
-    { commit: c2, added: [], removed: ['src/a.vue', 'src/b.vue'] }
+    { commit: c1, added: ['src/a.vue', 'src/b.vue'], removed: [], renamed: [] },
+    { commit: c2, added: [], removed: ['src/a.vue', 'src/b.vue'], renamed: [] }
   ])
 })
 
@@ -70,7 +70,7 @@ test('groupTimeline：同一次提交里既有增加也有去掉', () => {
     { commit: c1, change: 'remove', from: 'src/old.vue' }
   ]
   assert.deepEqual(groupTimeline(timeline), [
-    { commit: c1, added: ['src/new.vue'], removed: ['src/old.vue'] }
+    { commit: c1, added: ['src/new.vue'], removed: ['src/old.vue'], renamed: [] }
   ])
 })
 
