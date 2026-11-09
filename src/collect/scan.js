@@ -8,7 +8,8 @@
  * 3. 只用项目入口跑一次 knip：得到「从入口走不到」的文件
  * 4. 配置了测试入口时，再加上测试入口跑一次：两次一比，就知道哪些「只被测试用到」
  * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的判为 unknown，
- *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external，在用的代码里有注释掉的引用的判为 dormant
+ *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external，在用的代码里有注释掉的引用的判为 dormant，
+ *    只有测试用到的判为 test-only；再顺着候选之间的 import 传递，只被没人用的文件引用的判为 dead-only-ref
  *
  * 候选清单里写好状态、证据、引用，history 只补历史，不改结论
  */
@@ -21,6 +22,7 @@ import { createSnapshot } from './snapshot.js'
 import { findDynamicLoads } from './dynamic-imports.js'
 import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external-refs.js'
 import { findCommentRefs } from './comment-refs.js'
+import { findImportRefs } from './path-refs.js'
 import { judge } from '../rules/index.js'
 
 /**
@@ -29,11 +31,8 @@ import { judge } from '../rules/index.js'
  */
 const ROOT_FILES = ['package.json', 'tsconfig.json', 'jsconfig.json']
 
-/** 候选证据的规则名 */
-export const SCAN_RULES = Object.freeze({
-  unreachable: 'knip-unreachable',
-  testOnly: 'knip-test-only'
-})
+import { SCAN_RULES } from './scan-rules.js'
+export { SCAN_RULES }
 
 /**
  * @typedef {object} ScanResult
@@ -146,12 +145,22 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
   }
 
   // 5. 规则层判定状态
-  const loads = findDynamicLoads({ files: contents, aliases: config.aliases })
-  for (const l of loads.filter((x) => x.scope === null)) {
+  // 动态加载：人工确认过不加载本地源码的（配置 reviewedDynamicLoads）不圈文件，只在证据里注明
+  const allLoads = findDynamicLoads({ files: contents, aliases: config.aliases })
+  const loads = allLoads.filter((l) => !isReviewed(l, config.reviewedDynamicLoads))
+  const reviewedLoads = allLoads
+    .filter((l) => isReviewed(l, config.reviewedDynamicLoads))
+    .map((l) => ({ ...l, reason: isReviewed(l, config.reviewedDynamicLoads).reason }))
+  for (const r of config.reviewedDynamicLoads) {
+    if (!allLoads.some((l) => l.from === r.from && l.expr === r.expr)) {
+      warnings.push({ from: r.from, line: 0, detail: `配置 reviewedDynamicLoads 里的 ${r.expr} 在这个提交里找不到（代码改了？），这条确认没有用上` })
+    }
+  }
+  for (const l of loads.filter((x) => x.scope.wide && !isReviewed(x, config.reviewedDynamicLoads))) {
     warnings.push({
       from: l.from,
       line: l.line,
-      detail: `动态加载的路径确定不了范围：${l.expr}，被它加载的文件可能被误报为没人用`
+      detail: `动态加载确定不了目录：${l.expr}，范围内的候选都判为 unknown；人工确认它不加载本地源码后，可以写进配置 reviewedDynamicLoads`
     })
   }
   const targets = files.map((f) => f.file)
@@ -164,7 +173,12 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
     targets,
     aliases: config.aliases
   })
-  const judged = judge({ files, loads, externalRefs, commentRefs })
+  // 测试文件里的 import：只有测试用到的候选，列出是哪些测试
+  const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+  const testRefs = findImportRefs({ files: testContents, targets, aliases: config.aliases })
+  // 候选之间的 import：只被没人用的文件引用的，跟着引用方处理
+  const importers = findImportRefs({ files: contents.filter((c) => candidateSet.has(c.path)), targets, aliases: config.aliases })
+  const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, importers })
   const byStatus = {}
   for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
 
@@ -184,7 +198,8 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
         skippedIgnored: skipped.ignored,
         byStatus
       },
-      dynamicLoads: loads.length,
+      dynamicLoads: allLoads.length,
+      reviewedLoads: reviewedLoads.length,
       addedDeps,
       outside: skipped.outside
     }
@@ -199,6 +214,11 @@ function evidenceFor(file, { withTests, stillUnused, version }) {
     return { rule: SCAN_RULES.unreachable, detail: `从入口和测试入口都走不到（knip ${version}）` }
   }
   return { rule: SCAN_RULES.testOnly, detail: `从入口走不到，只有测试用到（knip ${version}）` }
+}
+
+/** 这处动态加载有没有人工确认过：按写加载的文件和写法匹配；确认过返回那条配置 */
+function isReviewed(load, reviewed) {
+  return reviewed.find((r) => r.from === load.from && r.expr === load.expr) ?? null
 }
 
 /** glob 写成 git 的 pathspec：和 knip 的 glob 写法一致（** 跨目录） */

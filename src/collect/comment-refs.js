@@ -18,9 +18,9 @@
  * 已知限制：.vue 模板里注释掉的组件标签（<!-- <OldComp /> -->）不认：标签名对不上文件路径，
  * 一般同一个文件里注释掉的 import 会被认出来
  */
-import { posix } from 'node:path'
 import { findComments } from './strip-comments.js'
 import { SFC_EXTENSIONS, scriptOnly } from './source-text.js'
+import { buildLookup, resolveSpec } from './path-refs.js'
 
 const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx']
 const QUOTED = /(['"`])([^'"`\n]+?)\1/g
@@ -79,44 +79,6 @@ export function htmlComments(content) {
     out.push({ line: 1 + countNewlines(content.slice(0, m.index)), text: m[1] })
   }
   return out
-}
-
-/**
- * 注释里的路径换成相对仓库根目录的路径（不带结尾的 /）；不像路径的返回 null
- * @param {string} spec
- * @param {string} from
- * @param {Record<string, string>} aliases
- */
-export function resolveSpec(spec, from, aliases) {
-  let p = spec.trim().replace(/[?#].*$/, '')
-  if (p === '' || /\s/.test(p) || /^[a-z]+:/i.test(p)) return null // 带空格的是文字，http: 等是网址
-  if (p.startsWith('./') || p.startsWith('../')) {
-    p = posix.join(posix.dirname(from), p)
-  } else {
-    const name = Object.keys(aliases)
-      .filter((a) => p === a || p.startsWith(`${a}/`))
-      .sort((a, b) => b.length - a.length)[0]
-    if (name !== undefined) p = aliases[name] + p.slice(name.length)
-    else if (p.startsWith('/')) p = p.slice(1)
-  }
-  p = posix.normalize(p).replace(/\/+$/, '')
-  if (p === '' || p === '.' || p.startsWith('../') || p.startsWith('/')) return null
-  return p
-}
-
-/** 解析出的路径 → 它可能指的候选文件：完整路径、去掉扩展名、index 文件的目录 */
-function buildLookup(targets) {
-  const lookup = new Map()
-  const add = (key, t) => lookup.set(key, [...(lookup.get(key) ?? []), t])
-  for (const t of targets) {
-    add(t, t)
-    const ext = posix.extname(t)
-    if (!ext) continue
-    const stem = t.slice(0, -ext.length)
-    add(stem, t)
-    if (posix.basename(stem) === 'index' && posix.dirname(stem) !== '.') add(posix.dirname(stem), t)
-  }
-  return lookup
 }
 
 function countNewlines(s) {

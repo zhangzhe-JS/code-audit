@@ -7,5 +7,5 @@ export const locale = (lang) => import('./locale/' + lang + '.js')
 // 只加载 modules 这一层的 .js
 export const modules = require.context('./modules', false, /\.js$/)
 
-// 范围确定不了：只发警告，不圈文件
+// 确定不了目录：已人工确认（见 expected.json 的 config），不圈文件
 export const any = (p) => import(p)

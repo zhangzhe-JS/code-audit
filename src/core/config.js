@@ -41,6 +41,9 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {Record<string, string>} aliases scan 用：路径别名 → 相对仓库根目录的目录，如 { "@": "src" }
  *                                   （对应构建配置里的 resolve.alias）
  * @property {string[]} scanIgnore   scan 用：不列为候选的文件（glob），如 mock、构建脚本
+ * @property {{from: string, expr: string, reason: string}[]} reviewedDynamicLoads scan 用：人工确认过、
+ *                                   不会加载本地源码的动态加载（如加载 CDN 上的脚本）。
+ *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法，reason 写确认的理由（会写进报告）
  */
 
 /** @type {Readonly<Config>} */
@@ -82,7 +85,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   testEntries: Object.freeze([]),
   // 别名没有默认值：@ 指向哪里各项目不同，猜错了引用会解析不到
   aliases: Object.freeze({}),
-  scanIgnore: Object.freeze([])
+  scanIgnore: Object.freeze([]),
+  // 动态加载默认都不放过：人工确认过的才写进来
+  reviewedDynamicLoads: Object.freeze([])
 })
 
 /**
@@ -172,6 +177,19 @@ export function resolveConfig(overrides = {}) {
     }
   }
 
+  if (!Array.isArray(config.reviewedDynamicLoads)) {
+    errors.push('reviewedDynamicLoads 必须是数组，如 [{ from: "src/a.js", expr: "import(url)", reason: "加载的是 CDN 脚本" }]')
+  } else {
+    config.reviewedDynamicLoads.forEach((r, i) => {
+      const at = `reviewedDynamicLoads[${i}]`
+      if (!isPlainObject(r)) return errors.push(`${at} 必须是对象，如 { from, expr, reason }`)
+      for (const k of Object.keys(r)) if (!['from', 'expr', 'reason'].includes(k)) errors.push(`${at} 不认识的字段：${k}`)
+      if (!isRelativeGlob(r.from) || /[*?[]/.test(r.from)) errors.push(`${at}.from 必须是相对仓库根目录的文件路径：${r.from}`)
+      if (typeof r.expr !== 'string' || r.expr.trim() === '') errors.push(`${at}.expr 必须照抄 scan 输出里的写法，如 "import(url)"`)
+      if (typeof r.reason !== 'string' || r.reason.trim() === '') errors.push(`${at}.reason 必须写确认的理由：会写进报告，说明为什么不会加载本地源码`)
+    })
+  }
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -186,7 +204,8 @@ export function resolveConfig(overrides = {}) {
     entries: Object.freeze([...config.entries]),
     testEntries: Object.freeze([...config.testEntries]),
     aliases: Object.freeze({ ...config.aliases }),
-    scanIgnore: Object.freeze([...config.scanIgnore])
+    scanIgnore: Object.freeze([...config.scanIgnore]),
+    reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r })))
   })
 }
 

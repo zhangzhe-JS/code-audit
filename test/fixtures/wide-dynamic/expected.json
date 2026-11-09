@@ -1,0 +1,10 @@
+{
+  "description": "确定不了目录的动态加载（import(name + '.vue')）：结尾是 .vue 的候选都判 unknown；.js 不在范围里，照常判 dead",
+  "entries": ["src/main.js"],
+  "items": [
+    { "id": "file:src/loader.js", "status": "live" },
+    { "id": "file:src/utils/format.js", "status": "dead" },
+    { "id": "file:src/views/Old.vue", "status": "unknown" },
+    { "id": "file:src/views/home.vue", "status": "unknown" }
+  ]
+}

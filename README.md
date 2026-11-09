@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）进行中：已做动态加载（`unknown`）、图外使用（`external`）、注释停用（`dormant`），其余状态还没判定，暂时也标 `unknown` 并在证据里说明。verify 还没做。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做，暂时也标 `unknown` 并在证据里说明。verify 还没做。进度见 `docs/progress.md`。
 
 ---
 
@@ -143,11 +143,21 @@ node bin/code-audit.js scan --root ../my-app --profile profiles/my-app.js --out 
 
 scan 先找出「从入口走不到」的文件，再由规则层（`src/rules/`）判定状态，写进候选清单；history 只补历史，不改状态。分析的是提交里的代码（默认 HEAD，`--rev` 可指定），工作区没提交的改动不算：文件导出到系统临时目录再分析，不碰目标仓库的工作区和暂存区。提交号写进候选清单的 `rev`，history 默认查同一个提交，两边看到的是同一份代码。没有候选时输出空的 `files`，照样能交给 history、report。代码里的 `import.meta.glob` 会自动换算成入口；参数不是字符串的 glob 换算不了，会在输出里提示。
 
-路径里有变量的动态加载（`import('./views/' + name)`、`require.context('./modules')` 等），按路径里固定的开头和结尾圈出可能加载的文件，落在范围里的候选判为 `unknown`，引用里记下加载的位置。路径开头就是变量（如 `import(path)`）时范围确定不了，只在输出里提示。
+路径里有变量的动态加载（`import('./views/' + name)`、`require.context('./modules')` 等），按路径里固定的开头和结尾圈出可能加载的文件，落在范围里的候选判为 `unknown`，引用里记下加载的位置。路径开头就是变量（如 `import(path)`、`import(name + '.vue')`）时确定不了目录，范围是整个仓库，只按路径里固定的结尾缩小，圈到的都判 `unknown`。人工确认它不加载本地源码后，写进配置：
+
+```js
+reviewedDynamicLoads: [
+  { from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' }  // expr 照抄 scan 输出
+]
+```
+
+之后它不再圈文件，范围里判为 `dead` 的，证据会写上这条理由。
 
 knip 不分析的文件（构建配置、脚本、index.html、package.json，源码目录里的 json 等）里写着候选的路径时，判为 `external`，比如 vite 配置里 `path.resolve(__dirname, 'src/shims/stub.js')`。测试文件里写的不算。
 
 在用的代码、配置文件的注释里有引号括起来的路径（如 `// import { check } from '@/utils/check.js'`），判为 `dormant`：以前用过、以后可能恢复，要留在原位。没人用的文件里的注释不算。
+
+只有测试用到的判为 `test-only`，列出引用它的测试。候选之间的 import 会顺着传递：被要保留的文件（如 external）引用的，跟着保留；只被同样没人用的文件引用的，判为 `dead-only-ref`，跟着引用方一起处理。
 
 源码里有 `.vue` 而 package.json 没声明 vue 时（monorepo、没有 package.json），knip 会跳过 .vue 文件。scan 只在临时目录里补上依赖声明，输出里会提示。
 
@@ -199,7 +209,7 @@ node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 
 **安全约定**：输出不能写在被分析的仓库里；输出文件已存在、输出目录不为空时直接报错，工具不覆盖、不删除已有文件。
 
-规则层还没做完：目前判定动态加载、图外使用和注释停用。其余候选暂时也是 `unknown`，证据里写着「规则层还没做完」，和真正「无法判定」的可以区分开。
+什么都没命中、也没被候选引用的，判为 `dead`，证据写明排除了哪些情况。其余候选暂时也是 `unknown`，证据里写着「规则层还没做完」，和真正「无法判定」的可以区分开。
 
 ### 规划中
 

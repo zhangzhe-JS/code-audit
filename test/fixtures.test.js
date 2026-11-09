@@ -7,14 +7,13 @@ import { STATUSES } from '../src/core/schema.js'
 import { scan } from '../src/collect/scan.js'
 import { findKnip } from '../src/collect/knip.js'
 import { resolveConfig } from '../src/core/config.js'
-import { NOT_JUDGED } from '../src/rules/index.js'
 import { createRepo } from './helpers/repo.js'
 
 /**
  * 已经做好规则的状态：这些状态要和标准答案完全一致。
- * 其余状态的规则还没做，只检查文件被列为候选、暂时标着「未判定」。每做完一条规则就加进来
+ * 其余状态（pending、internal）的规则还没做，只检查文件被列为候选。做完就加进来
  */
-const IMPLEMENTED = new Set(['unknown', 'external', 'dormant'])
+const IMPLEMENTED = new Set(['unknown', 'external', 'dormant', 'test-only', 'dead-only-ref', 'dead'])
 
 let hasKnip = true
 try {
@@ -73,7 +72,6 @@ for (const name of names) {
         assert.equal(c?.status, item.status, `${file} 应为 ${item.status}`)
       } else {
         assert.ok(c, `${file} 应列为候选`)
-        assert.ok(c.evidence.some((e) => e.rule === NOT_JUDGED.evidence.rule), `${file} 的规则还没做，应标着未判定`)
       }
     }
   })

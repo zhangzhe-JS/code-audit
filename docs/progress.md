@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：323 个，全部通过（`npm test`）
+- 测试：343 个，全部通过（`npm test`）
 
 ---
 
@@ -15,7 +15,7 @@
 | M1 | history 模块：引入、引用时间线、失去引用 | ✅ 完成（d4a518a） |
 | M2 | report：从 JSON 生成 Markdown 报告、文件头注释 | ✅ 完成（06c07de） |
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
-| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（306951b）、② external（8516d78）、③ dormant（待提交） |
+| M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批完成：①～③（306951b、8516d78、7ff1bcb），④～⑥（待提交）；第二批 pending、internal 未开始 |
 | M5 | verify：临时 worktree 实删，和构建 / 测试基线对比 | ⏳ 未开始 |
 | M6 | 接入第二个项目（Vue3 + TS） | ⏳ 未开始 |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
@@ -180,10 +180,10 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 |---|---|---|---|
 | ① | `unknown` | 路径里有变量的动态加载，圈出可能加载的文件 | ✅ 306951b |
 | ② | `external` | 在 knip 不分析的文件里搜候选的路径 | ✅ 8516d78 |
-| ③ | `dormant` | 在用的代码、配置文件的注释里搜引用 | ✅ 完成（待提交） |
-| ④ | `test-only` | 直接用 scan 的 knip 证据 | ⏳ |
-| ⑤ | `dead-only-ref` | 候选之间的引用关系 | ⏳ |
-| ⑥ | `dead` | 以上都不是 | ⏳ |
+| ③ | `dormant` | 在用的代码、配置文件的注释里搜引用 | ✅ 7ff1bcb |
+| ④ | `test-only` | 用 scan 的 knip 证据，列出直接引用它的测试 | ✅ 完成（待提交） |
+| ⑤ | `dead-only-ref` | 候选之间的引用关系，顺着引用传递要保留的状态 | ✅ 完成（待提交） |
+| ⑥ | `dead` | 以上都不是；每个 dead 都写明原因 | ✅ 完成（待提交） |
 | 后续 | `pending` / `internal` | 未合并分支 / 导出维度 | ⏳ |
 
 ### 公共部分
@@ -233,6 +233,41 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] fixture 支持在 expected.json 里写 `config`（如别名）
 - [x] 反向检查：逐个撤掉 11 处关键逻辑，每处都有测试失败
 
+### ④ test-only、⑤ dead-only-ref
+
+- [x] `src/collect/path-refs.js`：代码里 import / export from / import() / require 的路径 → 候选文件（去注释、.vue 只看 script、自己引用自己不算）；③ 的路径解析也挪到这里共用
+- [x] `src/rules/test-only.js`：knip 说「只有测试用到」的判为 `test-only`，列出直接 import 它的测试；经过别的文件间接用到的只有 knip 的结论
+- [x] `src/rules/graph.js`：顺着候选之间的 import 传递「要保留」的状态
+  - 候选 X 只被候选 Y 引用：Y 要保留（unknown、external、dormant、test-only，或者从别处传来的），X 跟着保留，状态和 Y 一样，证据写明跟着谁
+  - 一路往上都没有要保留的，X 才是 `dead-only-ref`；互相引用、入口走不到的一组也是
+  - 状态只往「更不敢删」的方向变，循环引用也会停下来
+- [x] 规则层分两步：先逐个文件跑规则，再顺着引用传递；候选之间的引用记进 refs（`via: static`）
+- [x] `SCAN_RULES` 挪到 `src/collect/scan-rules.js`：规则层也要用，避免和 scan.js 循环引用
+- [x] fixture `ref-chain`：external → 被它引用的、dormant → 被它引用的、互相引用、只被测试用到（含间接）、没人引用
+- [x] finicr-web：test-only 3 个（第 4 个 ResolutionTip 同时是 dormant，dormant 优先）、dead-only-ref 7 个，其中 `mixin.js` 和 M3 时人工确认的一致（只被 EchartsCom.vue 引用）
+- [x] scan → history → report 全流程跑通：报告里状态汇总是 unknown 44、external 2、dormant 2、test-only 3、dead-only-ref 7
+- [x] 反向检查：逐个撤掉 11 处关键逻辑，每处都有测试失败（「不找测试引用」一开始没抓到，补了测试）
+
+### ⑥ dead，以及确定不了目录的动态加载
+
+规则：什么都没命中、也没被候选引用的，判为 `dead`，证据 `no-ref` 写明排除了哪些情况。去掉了「规则还没做完」的占位。
+
+确定不了目录的动态加载（`import(path)` 这类），按文件逐个判，不是整批一刀切：
+- 范围是整个仓库，但用路径里固定的结尾、`require.context` 的正则缩小：`import(name + '.vue')` 只圈 .vue，.js 照常判 dead
+- 圈到的判 `unknown`，证据写明是哪一处、怎么缩小的、怎么放过
+- 人工确认它不加载本地源码（比如加载 CDN 脚本）后，写进配置 `reviewedDynamicLoads`（`from`、`expr` 照抄 scan 输出、`reason` 必填）：
+  不再圈文件，范围里判为 dead / dead-only-ref 的，证据写明确认的理由
+- 配置里的确认在当前提交找不到时（代码改了），输出里提示
+
+实现：
+- [x] `dynamic-imports.js`：确定不了目录时不再返回 null，返回整个仓库的范围（`wide: true`），保留结尾、正则
+- [x] `config.js`：新增 `reviewedDynamicLoads`，校验字段、理由不能空
+- [x] `rules/index.js`：没命中、没被引用的判 `dead`；dead / dead-only-ref 附上人工确认的理由
+- [x] fixture `wide-dynamic`：`import(name + '.vue')` 只圈 .vue；`dynamic-import` 的 `import(p)` 写进确认，范围外照常判
+- [x] finicr-web 全流程：dead 44、dead-only-ref 7、test-only 3、external 2、dormant 2，没有 unknown（这个项目没有路径里有变量的动态加载）；
+  人工隔离过的 13 个全部判为 dead 或 dead-only-ref，和人工结论一致
+- [x] 反向检查：逐个撤掉 9 处关键逻辑，每处都有测试失败
+
 ### ③ 时发现并修复：没声明 vue 依赖时 knip 跳过 .vue 文件
 
 - knip 只在 package.json 声明了 vue（svelte、astro 同理）时才解析 .vue，否则悄悄跳过，插件列表里照样显示 Vue，核对插件看不出来
@@ -259,7 +294,6 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | history 的 pattern 会匹配到同名目录下的其他文件：`config/field`（指 field/index.js）也匹配 `config/field/xxx` | 多算引用，显示「仍被引用」 | 低。不会误删；M4 改用 knip 的精确引用 |
 | history 的 pattern 会匹配到接口地址等字符串：`api/document` 匹配 `'/api/document/stream'` | 多算引用 | 低。不会误删 |
 | scan：写 import.meta.glob 的文件本身没人用时，被它加载的文件也当成在用 | 少报 | 低。不会误删 |
-| 动态加载的路径开头就是变量（`import(path)`）时范围确定不了，只发警告 | 被它加载的文件仍会列为候选，状态暂时是「规则未做完」的 unknown；规则做完后可能落到 dead | 中。规则做完前要想办法：比如有这类警告时整批不判 dead |
 | 字符串里出现 `import(`、`require(` 字样时也会当成调用 | 多圈文件、多发警告 | 低。不会误删 |
 | external 只认从仓库根目录写起的路径：配置里相对自身目录的写法（如 `build/` 下写 `'./x'`）、拼接出来的路径找不到 | 漏判 external，可能落到 dead | 中。实删前还有 verify（构建会报错） |
 | external：省略扩展名的路径同时也是目录名时（`'src/i18n/menu'` 指目录），也算引用了 `src/i18n/menu.js` | 多一条证据 | 低。模块解析本来也是文件优先 |
@@ -272,6 +306,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 
 已修复：
 
+- ~~动态加载的路径开头就是变量（`import(path)`）时范围确定不了，只发警告~~：圈整个仓库（按结尾、正则缩小），范围里的判 unknown；人工确认后写进 `reviewedDynamicLoads` 放过
 - ~~符号链接能绕过「输出不能写进目标仓库」的检查~~：两边都换成真实路径再比较；输出位置还不存在时按最近一级存在的父目录解析；失效的符号链接直接报错
 - ~~输出文件逐个写入，中途出错会留下半成品~~：目录先写到同级临时目录再改名；单个文件先写临时文件再用硬链接放到位（目标已存在时会失败，不会覆盖）
 - ~~报告状态汇总表里的状态文案没有转义~~：和其他表格单元格一样转义 `|` 和换行

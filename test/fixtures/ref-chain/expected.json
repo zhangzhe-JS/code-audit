@@ -1,0 +1,17 @@
+{
+  "description": "顺着引用传递：被要保留的文件引用的跟着保留；只被没人用的文件引用（含互相引用）的是 dead-only-ref；只被测试用到的是 test-only",
+  "entries": ["src/main.js"],
+  "config": { "testEntries": ["src/tests/**/*.test.js"] },
+  "items": [
+    { "id": "file:src/dead-a.js", "status": "dead-only-ref" },
+    { "id": "file:src/dead-b.js", "status": "dead-only-ref" },
+    { "id": "file:src/lonely.js", "status": "dead" },
+    { "id": "file:src/old-dep.js", "status": "dormant" },
+    { "id": "file:src/old-page.js", "status": "dormant" },
+    { "id": "file:src/stub-helper.js", "status": "external" },
+    { "id": "file:src/stub.js", "status": "external" },
+    { "id": "file:src/tested-dep.js", "status": "test-only" },
+    { "id": "file:src/tested.js", "status": "test-only" },
+    { "id": "file:src/used.js", "status": "live" }
+  ]
+}

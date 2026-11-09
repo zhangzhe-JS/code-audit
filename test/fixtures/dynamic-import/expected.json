@@ -1,6 +1,7 @@
 {
-  "description": "路径里有变量的动态加载：模板字符串、+ 拼接、require.context 范围里的是 unknown（含子目录），范围外的照常判定",
+  "description": "路径里有变量的动态加载：模板字符串、+ 拼接、require.context 范围里的是 unknown（含子目录），范围外的照常判定；确定不了目录的 import(p) 已人工确认，不圈文件",
   "entries": ["src/main.js"],
+  "config": { "reviewedDynamicLoads": [{ "from": "src/router.js", "expr": "import(p)", "reason": "只加载远程地址，不加载本地源码" }] },
   "items": [
     { "id": "file:src/dead.js", "status": "dead" },
     { "id": "file:src/locale/en.js", "status": "unknown" },

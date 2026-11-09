@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { judge, NOT_JUDGED } from '../src/rules/index.js'
+import { judge, NO_REF } from '../src/rules/index.js'
 
 const knipEv = { rule: 'knip-unreachable', detail: '从入口走不到' }
 const load = (from, line, scope, expr = 'import(`./v/${x}`)') => ({ from, line, kind: 'import', expr, scope })
@@ -33,15 +33,41 @@ test('judge：加载方本身也是候选时在证据里注明，状态仍是 un
   assert.match(r[0].evidence[1].detail, /src\/loader\.js 本身也从入口走不到/)
 })
 
-test('judge：不在范围里、范围确定不了、自己加载自己的，都不算命中', () => {
+test('judge：不在范围里（含整个仓库的范围按结尾排除）、自己加载自己的，都不算命中，判为 dead 并写明原因', () => {
+  const wideVue = { dir: '', wide: true, recursive: true, prefix: '', suffix: '.vue', regex: null }
   const r = judge({
     files: [{ file: 'src/other.js', evidence: [knipEv] }, { file: 'src/v/self.js', evidence: [knipEv] }],
-    loads: [load('src/a.js', 1, { ...views, dir: 'src/w' }), load('src/b.js', 1, null), load('src/v/self.js', 1, views)]
+    loads: [load('src/a.js', 1, { ...views, dir: 'src/w' }), load('src/b.js', 1, wideVue), load('src/v/self.js', 1, views)]
   })
   for (const x of r) {
-    assert.equal(x.status, NOT_JUDGED.status)
-    assert.deepEqual(x.evidence, [knipEv, NOT_JUDGED.evidence])
+    assert.equal(x.status, 'dead')
+    assert.deepEqual(x.evidence, [knipEv, NO_REF])
     assert.deepEqual(x.refs, [])
+  }
+})
+
+test('judge：确定不了目录的动态加载圈到的判 unknown，证据说明怎么缩小的、怎么放过', () => {
+  const wide = { dir: '', wide: true, recursive: true, prefix: '', suffix: '', regex: null }
+  const [a] = judge({ files: [{ file: 'src/a.js', evidence: [knipEv] }], loads: [load('src/util.js', 7, wide, 'import(p)')] })
+  assert.equal(a.status, 'unknown')
+  assert.match(a.evidence[1].detail, /src\/util\.js:7 动态加载：import\(p\)；路径的开头就是变量，确定不了目录，整个仓库都可能。人工确认.*reviewedDynamicLoads/)
+  const [b] = judge({ files: [{ file: 'src/b.vue', evidence: [knipEv] }], loads: [load('src/util.js', 7, { ...wide, suffix: '.vue' })] })
+  assert.match(b.evidence[1].detail, /只能按结尾 \.vue 圈/)
+})
+
+test('judge：人工确认过的动态加载不圈文件；范围里判为 dead / dead-only-ref 的写明确认的理由', () => {
+  const wide = { dir: '', wide: true, recursive: true, prefix: '', suffix: '', regex: null }
+  const reviewedLoads = [{ ...load('src/cdn.js', 3, wide, 'import(url)'), reason: '加载的是 CDN 脚本' }]
+  const importers = new Map([['src/b.js', [{ from: 'src/a.js', line: 1 }]]])
+  const r = judge({
+    files: [{ file: 'src/a.js', evidence: [knipEv] }, { file: 'src/b.js', evidence: [knipEv] }],
+    reviewedLoads,
+    importers
+  })
+  assert.deepEqual(r.map((x) => x.status), ['dead', 'dead-only-ref'])
+  for (const x of r) {
+    assert.equal(x.evidence.at(-1).rule, 'reviewed-dynamic-load')
+    assert.match(x.evidence.at(-1).detail, /在 src\/cdn\.js:3 的 import\(url\) 的范围里，已人工确认不加载本地源码：加载的是 CDN 脚本/)
   }
 })
 
@@ -96,4 +122,54 @@ test('judge：在用的代码里有注释掉的引用判为 dormant；同时在�
   assert.deepEqual(a.refs, [{ from: 'src/main.js', line: 84, via: 'comment' }])
   assert.equal(b.status, 'external')
   assert.deepEqual(b.evidence.map((e) => e.rule), ['knip-unreachable', 'external-ref', 'commented-ref'])
+})
+
+// ---------- test-only、dead-only-ref、顺着引用传递 ----------
+
+const testEv = { rule: 'knip-test-only', detail: '只有测试用到' }
+
+test('judge：knip 说只有测试用到的判为 test-only，列出直接引用它的测试', () => {
+  const testRefs = new Map([['src/a.js', [{ from: 'tests/a.test.js', line: 2 }]]])
+  const [a, b] = judge({ files: [{ file: 'src/a.js', evidence: [testEv] }, { file: 'src/b.js', evidence: [testEv] }], testRefs })
+  assert.equal(a.status, 'test-only')
+  assert.deepEqual(a.evidence.map((e) => e.detail), ['只有测试用到', '被测试 tests/a.test.js:2 引用'])
+  assert.deepEqual(a.refs, [{ from: 'tests/a.test.js', line: 2, via: 'static' }])
+  assert.equal(b.status, 'test-only') // 间接用到：只有 knip 的结论
+  assert.deepEqual(b.refs, [])
+})
+
+test('judge：只被没人用的候选引用的判为 dead-only-ref；互相引用的一组也是', () => {
+  const importers = new Map([
+    ['src/child.js', [{ from: 'src/parent.js', line: 1 }]],
+    ['src/p.js', [{ from: 'src/q.js', line: 3 }]],
+    ['src/q.js', [{ from: 'src/p.js', line: 4 }]]
+  ])
+  const files = ['src/parent.js', 'src/child.js', 'src/p.js', 'src/q.js'].map((file) => ({ file, evidence: [knipEv] }))
+  const r = Object.fromEntries(judge({ files, importers }).map((x) => [x.file, x]))
+  assert.equal(r['src/parent.js'].status, 'dead')
+  assert.equal(r['src/child.js'].status, 'dead-only-ref')
+  assert.match(r['src/child.js'].evidence[1].detail, /只被同样从入口走不到的文件引用：src\/parent\.js:1/)
+  assert.deepEqual(r['src/child.js'].refs, [{ from: 'src/parent.js', line: 1, via: 'static' }])
+  assert.equal(r['src/p.js'].status, 'dead-only-ref')
+  assert.equal(r['src/q.js'].status, 'dead-only-ref')
+})
+
+test('judge：引用方要保留时，被引用的跟着保留，证据写明跟着谁', () => {
+  const externalRefs = new Map([['src/stub.js', [{ from: 'vite.config.js', line: 1, text: "'src/stub.js'" }]]])
+  const commentRefs = new Map([['src/helper.js', [{ from: 'src/main.js', line: 9, text: "// import './helper.js'" }]]])
+  const importers = new Map([
+    ['src/helper.js', [{ from: 'src/stub.js', line: 2 }]],
+    ['src/deep.js', [{ from: 'src/helper.js', line: 5 }]]
+  ])
+  const files = ['src/stub.js', 'src/helper.js', 'src/deep.js'].map((file) => ({ file, evidence: [knipEv] }))
+  const r = Object.fromEntries(judge({ files, externalRefs, commentRefs, importers }).map((x) => [x.file, x]))
+
+  // helper 自己是 dormant，引用方 stub 是 external：取更不敢删的 external
+  assert.equal(r['src/helper.js'].status, 'external')
+  assert.deepEqual(r['src/helper.js'].evidence.map((e) => e.rule), ['knip-unreachable', 'commented-ref', 'inherited'])
+  assert.match(r['src/helper.js'].evidence[2].detail, /被 src\/stub\.js:2 引用，而 src\/stub\.js 是 external/)
+  assert.equal(r['src/deep.js'].status, 'external')
+  assert.match(r['src/deep.js'].evidence.at(-1).detail, /被 src\/helper\.js:5 引用/)
+  // 自己命中的状态就是最不敢删的：不写「跟着谁」
+  assert.equal(r['src/stub.js'].evidence.some((e) => e.rule === 'inherited'), false)
 })

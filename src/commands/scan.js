@@ -16,7 +16,7 @@ const USAGE = `用法：code-audit scan --root <仓库> --profile <配置> [选�
 
 找出从入口走不到的文件，输出候选清单，再交给 history --in 查历史。
 用 knip 分析（code-audit 的可选依赖），再由规则层判定状态。
-规则还没做完：目前判定动态加载（unknown）、图外使用（external）、注释停用（dormant），其余候选暂时也是 unknown，证据里有说明。
+每个候选都写明判定的原因（证据）。动态加载确定不了目录时，范围内的候选判为 unknown，不判 dead。
 分析的是提交里的代码，工作区没提交的改动不算；提交号写进候选清单，history 默认查同一个提交。
 
 选项：
@@ -108,7 +108,9 @@ function printSummary(s) {
   if (s.addedDeps.length > 0) {
     console.error(`  package.json 没有声明 ${s.addedDeps.join('、')}：只在临时目录里补上，否则 knip 会跳过对应的单文件组件`)
   }
-  if (s.dynamicLoads > 0) console.error(`  拼接路径的动态加载 ${s.dynamicLoads} 处，落在范围里的候选判为 unknown`)
+  if (s.dynamicLoads > 0) {
+    console.error(`  路径里有变量的动态加载 ${s.dynamicLoads} 处，落在范围里的候选判为 unknown` + (s.reviewedLoads > 0 ? `（其中 ${s.reviewedLoads} 处已人工确认，不圈文件）` : ''))
+  }
   if (s.warnings.length > 0) {
     console.error(`  注意 ${s.warnings.length} 处：`)
     for (const w of s.warnings) console.error(`    - ${w.from}:${w.line}  ${w.detail}`)

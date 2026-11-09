@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { findCommentRefs, htmlComments, resolveSpec } from '../src/collect/comment-refs.js'
+import { findCommentRefs, htmlComments } from '../src/collect/comment-refs.js'
+import { resolveSpec } from '../src/collect/path-refs.js'
 
 const find = (files, targets, aliases = { '@': 'src' }) =>
   Object.fromEntries(findCommentRefs({ files: Object.entries(files).map(([path, content]) => ({ path, content })), targets, aliases }))

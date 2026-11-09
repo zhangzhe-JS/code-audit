@@ -111,3 +111,32 @@ test('scan 的配置项：默认为空（入口、别名不猜），并校验', 
   assert.throws(() => resolveConfig({ aliases: { '@': '../src' } }), /aliases\["@"\] 必须是/)
   assert.throws(() => resolveConfig({ aliases: { '@': 'src/' } }), /aliases\["@"\] 必须是/)
 })
+
+test('reviewedDynamicLoads：默认为空；写对了原样保留并冻结', () => {
+  assert.deepEqual(resolveConfig({}).reviewedDynamicLoads, [])
+  const c = resolveConfig({ reviewedDynamicLoads: [{ from: 'src/a.js', expr: 'import(url)', reason: 'CDN' }] })
+  assert.deepEqual(c.reviewedDynamicLoads, [{ from: 'src/a.js', expr: 'import(url)', reason: 'CDN' }])
+  assert.ok(Object.isFrozen(c.reviewedDynamicLoads[0]))
+})
+
+test('reviewedDynamicLoads：写错时报错，理由不能空着', () => {
+  assert.throws(() => resolveConfig({ reviewedDynamicLoads: 'x' }), /reviewedDynamicLoads 必须是数组/)
+  const bad = [
+    'x',
+    { from: '/abs.js', expr: 'import(x)', reason: 'r' },
+    { from: 'src/*.js', expr: 'import(x)', reason: 'r' },
+    { from: 'src/a.js', expr: ' ', reason: 'r' },
+    { from: 'src/a.js', expr: 'import(x)', reason: '' },
+    { from: 'src/a.js', expr: 'import(x)', reason: 'r', line: 3 }
+  ]
+  const msg = (() => {
+    try {
+      resolveConfig({ reviewedDynamicLoads: bad })
+    } catch (e) {
+      return e.message
+    }
+  })()
+  for (const re of [/\[0\] 必须是对象/, /\[1\]\.from/, /\[2\]\.from/, /\[3\]\.expr/, /\[4\]\.reason 必须写确认的理由/, /\[5\] 不认识的字段：line/]) {
+    assert.match(msg, re)
+  }
+})

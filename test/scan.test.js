@@ -242,7 +242,7 @@ test('scan：没有候选时，空清单也能通过 history 的校验', (t) => 
   assert.deepEqual(validateCandidates(r.candidates), [])
 })
 
-test('scan：规则层判定状态，落在动态加载范围里的是 unknown；范围确定不了的记警告', (t) => {
+test('scan：动态加载范围里的是 unknown；确定不了目录的圈整个仓库并记警告；人工确认过的放过，写明理由', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()
   t.after(() => {
@@ -253,17 +253,34 @@ test('scan：规则层判定状态，落在动态加载范围里的是 unknown�
   repo.write('src/pages/a.js', '')
   repo.commit('动态加载')
   const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/pages/a.js'] })
-  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run: fake.run })
 
-  const [dead, page] = r.candidates.files
+  // 没确认：import(p) 确定不了目录，整个仓库都可能，dead.js 也判 unknown
+  let r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run: fake.run })
+  let [dead, page] = r.candidates.files
+  assert.equal(dead.status, 'unknown')
+  assert.deepEqual(dead.refs, [{ from: 'src/loader.js', line: 2, via: 'dynamic' }])
   assert.equal(page.status, 'unknown')
-  assert.deepEqual(page.refs, [{ from: 'src/loader.js', line: 1, via: 'dynamic' }])
-  assert.deepEqual(page.evidence.map((e) => e.rule), [SCAN_RULES.unreachable, 'dynamic-load'])
-  assert.deepEqual(dead.evidence.map((e) => e.rule), [SCAN_RULES.unreachable, 'rules-incomplete'])
+  assert.deepEqual(page.refs.map((x) => x.line), [1, 2])
   assert.deepEqual(r.summary.counts.byStatus, { unknown: 2 })
   assert.equal(r.summary.dynamicLoads, 2)
-  assert.match(r.summary.warnings.map((w) => `${w.from}:${w.line} ${w.detail}`).join('\n'), /src\/loader\.js:2 动态加载的路径确定不了范围：import\(p\)/)
+  assert.match(r.summary.warnings.map((w) => `${w.from}:${w.line} ${w.detail}`).join('\n'), /src\/loader\.js:2 动态加载确定不了目录：import\(p\)/)
   assert.deepEqual(validateCandidates(r.candidates), [])
+
+  // 人工确认 import(p) 不加载本地源码：dead.js 判 dead，写明理由；pages/a.js 仍在 ./pages/ 的范围里
+  const reviewed = [
+    { from: 'src/loader.js', expr: 'import(p)', reason: '加载的是 CDN 脚本' },
+    { from: 'src/gone.js', expr: 'import(x)', reason: '已删除' }
+  ]
+  r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'], reviewedDynamicLoads: reviewed }), knipDir, run: fake.run })
+  ;[dead, page] = r.candidates.files
+  assert.equal(dead.status, 'dead')
+  assert.deepEqual(dead.evidence.map((e) => e.rule), [SCAN_RULES.unreachable, 'no-ref', 'reviewed-dynamic-load'])
+  assert.match(dead.evidence[2].detail, /已人工确认不加载本地源码：加载的是 CDN 脚本/)
+  assert.equal(page.status, 'unknown')
+  assert.equal(r.summary.reviewedLoads, 1)
+  const warnings = r.summary.warnings.map((w) => w.detail).join('\n')
+  assert.doesNotMatch(warnings, /确定不了目录：import\(p\)/)
+  assert.match(warnings, /reviewedDynamicLoads 里的 import\(x\) 在这个提交里找不到/)
 })
 
 test('scan：构建配置里写着路径的判为 external；测试文件里写的不算', (t) => {
@@ -283,7 +300,7 @@ test('scan：构建配置里写着路径的判为 external；测试文件里写�
   const [dead, helper] = r.candidates.files
   assert.equal(dead.status, 'external')
   assert.deepEqual(dead.refs, [{ from: 'vite.config.js', line: 1, via: 'config' }])
-  assert.equal(helper.status, 'unknown')
+  assert.equal(helper.status, 'dead')
   assert.deepEqual(helper.refs, [])
 })
 
@@ -305,7 +322,8 @@ test('scan：在用的代码里注释掉的引用判为 dormant；候选、测�
   const byFile = Object.fromEntries(r.candidates.files.map((f) => [f.file, f]))
   assert.equal(byFile['src/dead.js'].status, 'dormant')
   assert.deepEqual(byFile['src/dead.js'].refs, [{ from: 'src/main.js', line: 2, via: 'comment' }])
-  assert.deepEqual(byFile['src/helper.js'].refs, [])
+  // 候选、测试文件里的注释不算（helper.js 被测试 import 了，那是另一回事）
+  assert.equal(byFile['src/helper.js'].refs.some((x) => x.via === 'comment'), false)
   assert.deepEqual(byFile['src/mock/data.js'].refs, [])
 })
 
@@ -343,6 +361,27 @@ test('scan：package.json 不是合法的 JSON 时报错', (t) => {
     () => scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run: fakeRun({ mainOnly: [] }).run }),
     /package\.json 不是合法的 JSON/
   )
+})
+
+test('scan：只有测试用到的判为 test-only，列出引用它的测试；只被候选引用的判为 dead-only-ref', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('src/dead.js', "import './orphan.js'\n")
+  repo.write('src/orphan.js', '')
+  repo.commit('引用')
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/helper.js', 'src/orphan.js'], withTests: ['src/dead.js', 'src/orphan.js'] })
+  const config = resolveConfig({ entries: ['src/main.js'], testEntries: ['src/tests/**/*.test.js'] })
+  const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
+
+  const byFile = Object.fromEntries(r.candidates.files.map((f) => [f.file, f]))
+  assert.equal(byFile['src/helper.js'].status, 'test-only')
+  assert.deepEqual(byFile['src/helper.js'].refs, [{ from: 'src/tests/helper.test.js', line: 1, via: 'static' }])
+  assert.equal(byFile['src/orphan.js'].status, 'dead-only-ref')
+  assert.deepEqual(byFile['src/orphan.js'].refs, [{ from: 'src/dead.js', line: 1, via: 'static' }])
 })
 
 test('scan：生成的候选清单能通过 history 的校验', (t) => {

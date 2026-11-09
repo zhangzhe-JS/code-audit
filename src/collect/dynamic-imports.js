@@ -11,8 +11,9 @@
  *   `./views/page-${x}`   → 目录 views，文件名以 page- 开头
  * 变量里可能有 /，所以一律包括子目录；路径没写扩展名时，去掉扩展名再比较。宁可多圈，不可漏圈。
  *
- * 只认字符串字面量、模板字符串、用 + 拼接的字符串。开头没有固定的目录（如 import(path)）时，
- * 范围确定不了，scope 为 null，由调用方记警告
+ * 开头没有固定的目录（如 import(path)、import(name + '.vue')、目录不是字符串的 require.context）时，
+ * 确定不了目录：范围是整个仓库（wide），只按路径里固定的结尾、require.context 的正则缩小。
+ * 宁可多圈：这类加载圈到的候选都判 unknown，除非人工确认过（配置 reviewedDynamicLoads）
  */
 import { resolvePattern } from './glob-imports.js'
 import { codeOf, lineAt, readString } from './source-text.js'
@@ -23,12 +24,13 @@ import { codeOf, lineAt, readString } from './source-text.js'
  * @property {number} line
  * @property {'import'|'require'|'require.context'} kind
  * @property {string} expr  代码里的写法，压成一行，过长截断
- * @property {LoadScope|null} scope  可能加载哪些文件；null = 范围确定不了
+ * @property {LoadScope} scope  可能加载哪些文件
  */
 
 /**
  * @typedef {object} LoadScope
- * @property {string} dir         目录，相对仓库根目录
+ * @property {string} dir         目录，相对仓库根目录；'' = 确定不了目录，整个仓库
+ * @property {boolean} wide       确定不了目录（dir 为 ''）
  * @property {boolean} recursive  是否包括子目录
  * @property {string} prefix      相对 dir 的路径的开头（require.context 时为空）
  * @property {string} suffix      结尾（require.context 时为空）
@@ -68,8 +70,8 @@ export function findDynamicLoads({ files, aliases = {} }) {
  * @param {LoadScope} scope
  */
 export function inScope(file, scope) {
-  if (!file.startsWith(`${scope.dir}/`)) return false
-  const rel = file.slice(scope.dir.length + 1)
+  if (scope.dir !== '' && !file.startsWith(`${scope.dir}/`)) return false
+  const rel = scope.dir === '' ? file : file.slice(scope.dir.length + 1)
   if (!scope.recursive && rel.includes('/')) return false
   if (scope.regex) return scope.regex.test(`./${rel}`)
   if (!rel.startsWith(scope.prefix)) return false
@@ -80,7 +82,7 @@ export function inScope(file, scope) {
 
 const STATIC = Symbol('static')
 
-/** import() / require() 的第一个参数：拼接路径时返回范围；路径固定返回 STATIC；确定不了返回 null */
+/** import() / require() 的第一个参数：拼接路径时返回范围；路径固定返回 STATIC */
 function concatScope(arg, from, aliases) {
   const segs = segmentsOf(arg)
   if (!segs.includes(DYNAMIC)) return STATIC
@@ -89,18 +91,16 @@ function concatScope(arg, from, aliases) {
   const suffix = typeof last === 'string' ? last.replace(/\?.*$/, '') : '' // 去掉 ?raw 这类查询参数
 
   const cut = prefix.lastIndexOf('/')
-  if (cut < 0) return null // 开头没有固定的目录
-  const dir = resolveDir(prefix.slice(0, cut + 1), from, aliases)
-  if (dir === null) return null
-  return { dir, recursive: true, prefix: prefix.slice(cut + 1), suffix, regex: null }
+  const dir = cut < 0 ? null : resolveDir(prefix.slice(0, cut + 1), from, aliases)
+  // 开头没有固定的目录，或目录换算不了（包名、没配置的别名）：整个仓库，只按结尾缩小
+  if (dir === null) return wideScope(suffix, null)
+  return { dir, wide: false, recursive: true, prefix: prefix.slice(cut + 1), suffix, regex: null }
 }
 
 /** require.context(目录, 是否含子目录, 正则)：第二、三个参数可以不写，默认含子目录、不限文件 */
 function contextScope(args, from, aliases) {
   const dirLit = literalOf(args[0])
-  if (dirLit === null) return null
-  const dir = resolveDir(dirLit, from, aliases)
-  if (dir === null) return null
+  const dir = dirLit === null ? null : resolveDir(dirLit, from, aliases)
   const recursive = args[1] === undefined || args[1] !== 'false' // 不是字面量 false 就按含子目录算
   let regex = null
   const re = args[2]?.match(/^\/([\s\S]+)\/([a-z]*)$/)
@@ -111,7 +111,13 @@ function contextScope(args, from, aliases) {
       regex = null // 正则解析不了：不限文件，宁可多圈
     }
   }
-  return { dir, recursive, prefix: '', suffix: '', regex }
+  // 目录不是字符串、换算不了：整个仓库，只按正则缩小（正则对 ./相对路径 测试，这时按整个路径测）
+  if (dir === null) return wideScope('', regex)
+  return { dir, wide: false, recursive, prefix: '', suffix: '', regex }
+}
+
+function wideScope(suffix, regex) {
+  return { dir: '', wide: true, recursive: true, prefix: '', suffix, regex }
 }
 
 /** 目录写法换成相对仓库根目录的路径；换不了（不认识的写法、包名、仓库根目录本身）返回 null */

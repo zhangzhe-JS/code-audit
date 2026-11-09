@@ -15,16 +15,26 @@ export const RULE = 'dynamic-load'
  * @returns {import('./index.js').RuleHit | null}
  */
 export function dynamicLoadRule(file, { loads, candidates }) {
-  const hits = loads.filter((l) => l.scope !== null && l.from !== file && inScope(file, l.scope))
+  const hits = loads.filter((l) => l.from !== file && inScope(file, l.scope))
   if (hits.length === 0) return null
   return {
     status: 'unknown',
     evidence: hits.map((l) => ({
       rule: RULE,
       detail:
-        `可能被 ${l.from}:${l.line} 动态加载：${l.expr}；路径里有变量，无法确定是否用到` +
+        `可能被 ${l.from}:${l.line} 动态加载：${l.expr}；` +
+        (l.scope.wide
+          ? `路径的开头就是变量，确定不了目录，${narrowed(l.scope)}。人工确认它不加载本地源码后，可以写进配置 reviewedDynamicLoads`
+          : '路径里有变量，无法确定是否用到') +
         (candidates.has(l.from) ? `（${l.from} 本身也从入口走不到）` : '')
     })),
     refs: hits.map((l) => ({ from: l.from, line: l.line, via: 'dynamic' }))
   }
+}
+
+/** 确定不了目录时，范围靠什么缩小的 */
+function narrowed(scope) {
+  if (scope.suffix) return `只能按结尾 ${scope.suffix} 圈`
+  if (scope.regex) return `只能按正则 ${scope.regex} 圈`
+  return '整个仓库都可能'
 }

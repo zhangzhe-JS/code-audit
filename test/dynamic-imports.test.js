@@ -19,7 +19,7 @@ test('模板字符串：取固定的开头和结尾，记下行号和写法', ()
       line: 2,
       kind: 'import',
       expr: 'import(`./views/${n}.vue`)',
-      scope: { dir: 'src/router/views', recursive: true, prefix: '', suffix: '.vue', regex: null }
+      scope: { dir: 'src/router/views', wide: false, recursive: true, prefix: '', suffix: '.vue', regex: null }
     }
   ])
 })
@@ -27,6 +27,7 @@ test('模板字符串：取固定的开头和结尾，记下行号和写法', ()
 test('用 + 拼接、别名、文件名有固定开头', () => {
   assert.deepEqual(scopeOf('src/a.js', "import('@/views/page-' + name + '.vue')"), {
     dir: 'src/views',
+    wide: false,
     recursive: true,
     prefix: 'page-',
     suffix: '.vue',
@@ -37,6 +38,7 @@ test('用 + 拼接、别名、文件名有固定开头', () => {
 test('require 拼接路径；结尾的查询参数去掉', () => {
   assert.deepEqual(scopeOf('src/i18n/index.js', 'const m = require(`../locale/${lang}.js?raw`)'), {
     dir: 'src/locale',
+    wide: false,
     recursive: true,
     prefix: '',
     suffix: '.js',
@@ -60,10 +62,13 @@ test('路径固定的不算（knip 能处理）：字符串、没有变量的模
   assert.deepEqual(find('src/a.js', code), [])
 })
 
-test('范围确定不了时 scope 为 null：变量、开头没有目录、包名、三元表达式', () => {
-  const code = ['import(path)', "import('page-' + x)", 'import(`lodash/${m}`)', "import(a ? './a.js' : './b.js')"].join('\n')
+test('确定不了目录时范围是整个仓库（wide），按固定的结尾缩小：变量、开头没有目录、包名、三元表达式', () => {
+  const code = ['import(path)', "import('page-' + x + '.vue')", 'import(`lodash/${m}`)', "import(a ? './a.js' : './b.js')"].join('\n')
   const loads = find('src/a.js', code)
-  assert.deepEqual(loads.map((l) => [l.line, l.scope]), [[1, null], [2, null], [3, null], [4, null]])
+  assert.deepEqual(
+    loads.map((l) => [l.line, l.scope.wide, l.scope.dir, l.scope.suffix]),
+    [[1, true, '', ''], [2, true, '', '.vue'], [3, true, '', ''], [4, true, '', '']]
+  )
 })
 
 test('require.context：默认含子目录、不限文件；false 不含子目录；正则里有括号', () => {
@@ -73,15 +78,16 @@ test('require.context：默认含子目录、不限文件；false 不含子目�
     "require.context('./m', true, /(a|b)\\.js$/i)"
   ].join('\n')
   const [a, b, c] = find('src/store/index.js', code).map((l) => l.scope)
-  assert.deepEqual(a, { dir: 'src/store/modules', recursive: true, prefix: '', suffix: '', regex: null })
+  assert.deepEqual(a, { dir: 'src/store/modules', wide: false, recursive: true, prefix: '', suffix: '', regex: null })
   assert.deepEqual([b.dir, b.recursive, String(b.regex)], ['src/icons', false, '/\\.svg$/'])
   assert.deepEqual([c.dir, c.recursive, String(c.regex)], ['src/store/m', true, '/(a|b)\\.js$/i'])
 })
 
-test('require.context：目录不是字符串时 scope 为 null；正则写错时不限文件', () => {
-  const [a, b] = find('src/a.js', "require.context(dir)\nrequire.context('./x', true, /(/)").map((l) => l.scope)
-  assert.equal(a, null)
-  assert.equal(b.regex, null)
+test('require.context：目录不是字符串时范围是整个仓库，按正则缩小；正则写错时不限文件', () => {
+  const [a, b, c] = find('src/a.js', "require.context(dir)\nrequire.context(dir, true, /\\.vue$/)\nrequire.context('./x', true, /(/)").map((l) => l.scope)
+  assert.deepEqual([a.wide, a.dir, a.regex], [true, '', null])
+  assert.deepEqual([b.wide, String(b.regex)], [true, '/\\.vue$/'])
+  assert.equal(c.regex, null)
 })
 
 test('注释里的、.vue 模板里的不算；import.meta.glob、obj.import() 不算', () => {
@@ -121,6 +127,14 @@ test('inScope：路径省略扩展名时去掉扩展名再比较；结尾为空�
   assert.equal(inScope('src/v/a/index.vue', s), true)
   assert.equal(inScope('src/v/a/main.vue', s), false)
   assert.equal(inScope('src/v/a/b.js', { ...s, suffix: '' }), true)
+})
+
+test('inScope：整个仓库的范围按结尾、正则缩小', () => {
+  const wide = { dir: '', wide: true, recursive: true, prefix: '', suffix: '', regex: null }
+  assert.equal(inScope('src/a.js', wide), true)
+  assert.equal(inScope('src/a.js', { ...wide, suffix: '.vue' }), false)
+  assert.equal(inScope('src/views/a.vue', { ...wide, suffix: '.vue' }), true)
+  assert.equal(inScope('src/views/a.vue', { ...wide, regex: /\.vue$/ }), true)
 })
 
 test('inScope：require.context 的正则和是否含子目录', () => {

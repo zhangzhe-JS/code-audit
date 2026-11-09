@@ -42,5 +42,9 @@ export default {
   aliases: { '@': 'src', '~': 'src' },
 
   // 不列为候选的文件，比如测试用的 mock、只在构建时用的脚本
-  scanIgnore: ['src/mock/**', 'src/tests/**']
+  scanIgnore: ['src/mock/**', 'src/tests/**'],
+
+  // 人工确认过、不会加载本地源码的动态加载（路径开头就是变量时，scan 会把范围内的候选都判 unknown）
+  // from、expr 照抄 scan 输出里的警告；reason 必填，会写进报告
+  reviewedDynamicLoads: [{ from: 'src/utils/loader.js', expr: 'import(url)', reason: '加载的是 CDN 上的脚本' }]
 }
