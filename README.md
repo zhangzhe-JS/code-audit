@@ -246,11 +246,18 @@ node bin/code-audit.js report --profile profiles/my-app.js --in reports/my-app/v
 - 有 import 关系的候选绑在一起删（引用方和被引用的），不会冤枉被引用的
 - 删了会出问题的，状态改为 `unknown`，证据写上出了什么问题；新增的构建警告列出来给人看，不算失败
 
-### 规划中
+**7. 隔离**：把 dead / dead-only-ref、并且实删验证通过的文件移进隔离区。**唯一会改动目标项目的命令**：
 
 ```bash
-node bin/code-audit.js quarantine --root ../my-app --in verified.json             # M7：隔离（会改动目标项目）
+node bin/code-audit.js quarantine --root ../my-app --profile profiles/my-app.js --in reports/my-app/verified.json           # 只打印计划
+node bin/code-audit.js quarantine --root ../my-app --profile profiles/my-app.js --in reports/my-app/verified.json --apply   # 执行
 ```
+
+- 隔离区在 profile 里配置 `quarantine: { dir: 'src/utils/_deprecated', base: 'src/utils' }`，默认 `<源码目录>/_deprecated`；子目录结构不变
+- `--apply` 前检查：工作区干净、当前提交就是分析的提交、新分支名没被占用
+- 新建分支（默认 `code-audit/quarantine-<日期>`），分两次提交：第一次只移动（git 认得出改名），第二次加头注释、修正相对路径（优先改成别名）、更新隔离区 README。不 push
+- git 钩子照常执行；任何一步出错都整体撤回，目标项目回到执行前的样子
+- lint 配置不自动改，计划里列出要手动加的那一行
 
 ---
 

@@ -46,6 +46,15 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法，reason 写确认的理由（会写进报告）
  * @property {VerifyConfig} verify    verify 用：在临时目录里跑的命令。没有默认值：各项目不同，猜错了就是乱跑
  * @property {BranchesConfig} branches scan 用：判断「其他分支在用」时查哪些没合并的分支
+ * @property {QuarantineConfig} quarantine quarantine 用：隔离区放在哪
+ */
+
+/**
+ * @typedef {object} QuarantineConfig
+ * @property {string|null} dir   隔离区目录，相对仓库根目录；null = 第一个源码目录下的 _deprecated（如 src/_deprecated）
+ * @property {string|null} base  文件按相对 base 的路径放进隔离区（子目录结构不变）；null = 第一个源码目录。
+ *   例：dir 'src/utils/_deprecated'、base 'src/utils'：src/utils/canvas/Rect.js → src/utils/_deprecated/canvas/Rect.js
+ *   不在 base 下的文件不隔离
  */
 
 /**
@@ -106,7 +115,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   // verify 的命令没有默认值；超时默认 30 分钟（构建前还可能跑 lint）
   verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 }),
   // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
-  branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null })
+  branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null }),
+  // 隔离区：不写就是第一个源码目录下的 _deprecated
+  quarantine: Object.freeze({ dir: null, base: null })
 })
 
 /**
@@ -229,6 +240,14 @@ export function resolveConfig(overrides = {}) {
   const age = config.branches.maxAgeDays
   if (age !== null && (!Number.isInteger(age) || age < 1)) errors.push(`branches.maxAgeDays 必须是正整数（天）或 null：${age}`)
 
+  for (const k of Object.keys(config.quarantine)) {
+    if (!['dir', 'base'].includes(k)) errors.push(`quarantine 里不认识的字段：${k}（可用的字段：dir、base）`)
+  }
+  for (const k of ['dir', 'base']) {
+    const v = config.quarantine[k]
+    if (v !== null && (!isRelativeDir(v) || v.split('/').includes('..'))) errors.push(`quarantine.${k} 必须是相对仓库根目录的目录，如 "src/_deprecated"：${v}`)
+  }
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -246,7 +265,8 @@ export function resolveConfig(overrides = {}) {
     scanIgnore: Object.freeze([...config.scanIgnore]),
     reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r }))),
     verify: Object.freeze({ ...config.verify }),
-    branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) })
+    branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) }),
+    quarantine: Object.freeze({ ...config.quarantine })
   })
 }
 
@@ -267,7 +287,7 @@ export function isValidHashLength(n) {
 }
 
 /** 按键合并的配置项 */
-const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify', 'branches'])
+const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify', 'branches', 'quarantine'])
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v)

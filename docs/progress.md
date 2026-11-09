@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：412 个，全部通过（`npm test`）
+- 测试：422 个，全部通过（`npm test`）
 
 ---
 
@@ -17,7 +17,7 @@
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
 | M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批（306951b～3df184c）；第二批 pending 完成；internal 随导出维度一起做 |
 | M5 | verify：临时目录实删，和构建 / 测试基线对比 | ✅ ① 试跑基线（fe163a1）、② 删除对比 + 定位（3a34279） |
-| M6 | 接入第二个项目（Vue3 + TS） | ✅ findip-portal-web 全流程跑通（待提交） |
+| M6 | 接入第二个项目（Vue3 + TS） | ✅ findip-portal-web 全流程跑通 |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
 
 ---
@@ -389,6 +389,35 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 - verify（build: `pnpm run build:ci`，含 lint 和 TS 编译；没有测试命令）：4 个 dead 一次全删，和基线一致，用时 1 分钟
 - 目标项目 `git status` 不变，临时目录没有残留
 - 注意：全局注册的组件删错了，构建不会报错（Vue 运行时才警告），verify 兜不住，只能靠 scan 认准标签用法
+
+## M7 quarantine（隔离）🚧
+
+唯一会改动目标项目的命令。默认只打印计划，加 `--apply` 才执行。
+
+决定（2026-11-09 和用户确认）：
+- 执行时新建分支，分两次提交：第一次只 `git mv`（git 认得出改名，历史接得上），第二次加头注释、改路径、更新清单。不 push
+- 只隔离 dead / dead-only-ref 并且实删验证通过的；没跑 verify 的不隔离
+- 隔离区可配置 `quarantine: { dir, base }`，默认 `<第一个源码目录>/_deprecated`；文件按相对 base 的路径放进去，子目录结构不变
+- lint 等工具配置不自动改，计划里列出要手动加的那一行
+
+实现：
+- [x] `src/quarantine/plan.js`：挑文件、算新位置、要改的路径、头注释；不隔离的写明原因
+  - 有 import 关系的绑成一组，一组里有一个不能移，整组都不移（免得留下的那个引用指空）
+  - 已经在隔离区里、不在 base 下、隔离区里已有同名文件、不能写注释的（.json 只移动不加头注释）
+- [x] `src/quarantine/rewrite.js`：被移走的文件里的相对路径（import / require / 样式 @import、url() / 模板 src、href）
+  - 优先改成别名（`../api/x` → `@/api/x`）：别名不随位置变，移回原路径也不用再改
+  - 没有别名时按新位置算相对路径；指向同一批移走的按它们的新位置；注释行、找不到的不改
+- [x] `src/quarantine/apply.js`：新建分支、两次提交；README 已有的原样保留，在最后追加这一批（表格：新路径、原路径、状态、引入、失去引用）
+  - git 钩子照常执行；任何一步出错（包括钩子没通过）整体撤回：reset 到开始的提交、切回原分支、删掉新分支
+- [x] `code-audit quarantine --root --profile --in [--apply] [--branch] [--moved-at]`：
+  执行前检查工作区干净、HEAD 就是分析的提交（中间有新提交要重新分析）、新分支名没被占用
+- [x] 测试：临时仓库里跑完整流程，检查第一次提交全是 R100（纯改名）、`git log --follow` 接得上；钩子失败时整体撤回
+- [x] 反向检查：逐个撤掉 12 处关键逻辑，每处都有测试失败
+- [x] finicr-web 试跑（只打印计划，不 --apply）：重新 scan → history → verify，40 个 dead / dead-only-ref 一次实删通过
+  - **发现并修复**：人工隔离区 `src/utils/_deprecated/` 里的 13 个文件，被计划再移进默认隔离区，变成 `src/_deprecated/utils/_deprecated/…`（隔离区套隔离区）。
+    现在路径里有一段和隔离区目录同名的（如 `_deprecated`）都算已经隔离，不再移
+  - 默认隔离区 `src/_deprecated`：隔离 27 个，改 12 处相对路径（都改成 `@/…`）；沿用现有的 `src/utils/_deprecated`（base `src/utils`）：0 个——剩下的 27 个都不在 utils 下
+  - 目标项目的提交、分支、工作区都没变
 
 ## 盲区兜底
 

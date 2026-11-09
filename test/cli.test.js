@@ -26,11 +26,16 @@ test('--help 列出全部命令', () => {
 })
 
 test('子命令能收到剩下的参数', () => {
-  // 用还是空壳的 quarantine 来测分发：空壳会原样打印收到的参数
-  const r = cli('quarantine', '--file', 'a.js')
-  assert.equal(r.status, 0)
-  assert.match(r.stdout, /quarantine: 未实现/)
-  assert.match(r.stdout, /a\.js/)
+  // 子命令收到 --help 时打印自己的用法：说明参数传到了子命令
+  for (const name of ['scan', 'history', 'verify', 'report', 'quarantine']) {
+    const r = cli(name, '--help')
+    assert.equal(r.status, 0, name)
+    assert.match(r.stdout, /用法/, name)
+  }
+  // 不认识的参数由子命令报错
+  const bad = cli('quarantine', '--file', 'a.js')
+  assert.equal(bad.status, 1)
+  assert.match(bad.stderr, /--file/)
 })
 
 test('未知命令的退出码为 1', () => {
