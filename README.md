@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做，暂时也标 `unknown` 并在证据里说明。verify 还没做。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做。verify 进行中：已能在临时目录里试跑基线。进度见 `docs/progress.md`。
 
 ---
 
@@ -211,10 +211,22 @@ node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 
 什么都没命中、也没被候选引用的，判为 `dead`，证据写明排除了哪些情况。其余候选暂时也是 `unknown`，证据里写着「规则层还没做完」，和真正「无法判定」的可以区分开。
 
+**5. 试跑基线**（verify 第一部分）：在 profile 里写上构建、测试命令，确认它们能在临时目录里无人值守跑通：
+
+```js
+verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800 }  // 命令没有默认值；不能停下来等人输入
+```
+
+```bash
+node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js [--keep]
+```
+
+代码从提交里导出到系统临时目录，`node_modules` 克隆一份（macOS 上几秒、不占额外磁盘），构建、测试都在那里跑，原项目不写任何东西。`--keep` 保留临时目录和完整日志，排查用。
+
 ### 规划中
 
 ```bash
-node bin/code-audit.js verify     --root ../my-app --in data.json                 # M5：实删验证
+node bin/code-audit.js verify     --root ../my-app --profile p.js --in data.json  # M5：删掉候选后和基线对比
 node bin/code-audit.js quarantine --root ../my-app --in data.json                 # M7：隔离（会改动目标项目）
 ```
 

@@ -8,7 +8,7 @@
 const commands = {
     scan: { desc: '采集 + 判定，输出候选清单 JSON', load: () => import('../src/commands/scan.js') },
     history: { desc: '补充 git 历史：引入、失去引用', load: () => import('../src/commands/history.js') },
-    verify: { desc: '在临时 worktree 里实删验证', load: () => import('../src/commands/verify.js') },
+    verify: { desc: '在临时目录里实删验证（现在支持试跑基线）', load: () => import('../src/commands/verify.js') },
     report: { desc: '从 JSON 生成报告', load: () => import('../src/commands/report.js') },
     quarantine: { desc: '隔离到 _deprecated/（会改动目标项目）', load: () => import('../src/commands/quarantine.js') }
 }

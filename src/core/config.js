@@ -44,6 +44,14 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {{from: string, expr: string, reason: string}[]} reviewedDynamicLoads scan 用：人工确认过、
  *                                   不会加载本地源码的动态加载（如加载 CDN 上的脚本）。
  *                                   from 是写加载的文件，expr 照抄 scan 输出里的写法，reason 写确认的理由（会写进报告）
+ * @property {VerifyConfig} verify    verify 用：在临时目录里跑的命令。没有默认值：各项目不同，猜错了就是乱跑
+ */
+
+/**
+ * @typedef {object} VerifyConfig
+ * @property {string|null} build  构建命令，如 "npm run build"；必须能无人值守跑完（不能停下来等人输入）
+ * @property {string|null} test   测试命令，如 "npm test"；不写就不跑测试
+ * @property {number} timeoutSeconds 每条命令最多跑多久，超时算失败
  */
 
 /** @type {Readonly<Config>} */
@@ -87,7 +95,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   aliases: Object.freeze({}),
   scanIgnore: Object.freeze([]),
   // 动态加载默认都不放过：人工确认过的才写进来
-  reviewedDynamicLoads: Object.freeze([])
+  reviewedDynamicLoads: Object.freeze([]),
+  // verify 的命令没有默认值；超时默认 30 分钟（构建前还可能跑 lint）
+  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 })
 })
 
 /**
@@ -190,6 +200,17 @@ export function resolveConfig(overrides = {}) {
     })
   }
 
+  for (const k of Object.keys(config.verify)) {
+    if (!['build', 'test', 'timeoutSeconds'].includes(k)) errors.push(`verify 里不认识的字段：${k}（可用的字段：build、test、timeoutSeconds）`)
+  }
+  for (const k of ['build', 'test']) {
+    const v = config.verify[k]
+    if (v !== null && (typeof v !== 'string' || v.trim() === '')) errors.push(`verify.${k} 必须是命令字符串，如 "npm run ${k}"；不跑就不要写`)
+  }
+  if (!Number.isInteger(config.verify.timeoutSeconds) || config.verify.timeoutSeconds < 10) {
+    errors.push(`verify.timeoutSeconds 必须是不小于 10 的整数（秒）：${config.verify.timeoutSeconds}`)
+  }
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -205,7 +226,8 @@ export function resolveConfig(overrides = {}) {
     testEntries: Object.freeze([...config.testEntries]),
     aliases: Object.freeze({ ...config.aliases }),
     scanIgnore: Object.freeze([...config.scanIgnore]),
-    reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r })))
+    reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r }))),
+    verify: Object.freeze({ ...config.verify })
   })
 }
 
@@ -226,7 +248,7 @@ export function isValidHashLength(n) {
 }
 
 /** 按键合并的配置项 */
-const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles'])
+const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify'])
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v)
