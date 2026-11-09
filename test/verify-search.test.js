@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { compare, failures, normalize, warnings } from '../src/verify/signals.js'
+import { compare, failures, normalize, passedCount, warnings } from '../src/verify/signals.js'
 import { locate } from '../src/verify/locate.js'
 import { searchDeletions } from '../src/verify/search.js'
 import { groupUnits } from '../src/verify/index.js'
@@ -164,4 +164,44 @@ test('groupUnits：有 import 关系（static、引用方也要删）的绑成�
     ['src/q.js'],
     ['src/solo.js']
   ])
+})
+
+// ---------- 基线本来就有失败时，比失败的用例不够 ----------
+
+const failing = (output, exitCode = 1) => res(output, false, { exitCode })
+const base = { test: failing(' FAIL  t/old.test.js > broken\n Tests  1 failed | 99 passed (100)') }
+
+test('compare：基线本来就有失败，删后测试整个崩了（一条失败的用例都认不出）算问题', () => {
+  const r = compare(base, { test: failing('Error: Cannot find module ./setup.js') }, '')
+  assert.equal(r.passed, false)
+  assert.match(r.problems.join(), /测试没有正常跑完/)
+  assert.match(r.test.newFailures.join(), /测试没有正常跑完/)
+})
+
+test('compare：基线本来就有失败，退出码变了算问题', () => {
+  const r = compare(base, { test: failing(' FAIL  t/old.test.js > broken\n Tests  1 failed | 99 passed (100)', 2) }, '')
+  assert.deepEqual(r.problems, ['测试的退出码从 1 变成 2'])
+})
+
+test('compare：通过的用例变少算问题（读汇总行；没有汇总行时数 ✓ / PASS）', () => {
+  const fewer = compare(base, { test: failing(' FAIL  t/old.test.js > broken\nError: x\n Tests  1 failed | 50 passed (51)') }, '')
+  assert.deepEqual(fewer.problems, ['通过的测试变少了：99 → 50'])
+  const marks = compare({ test: res('✓ a\n✓ b\nPASS c') }, { test: res('✓ a\nPASS c') }, '')
+  assert.deepEqual(marks.problems, ['通过的测试变少了：3 → 2'])
+  // 一样多、变多都不算
+  assert.equal(compare(base, { test: failing(' FAIL  t/old.test.js > broken\n Tests  1 failed | 99 passed (100)') }, '').passed, true)
+})
+
+test('passedCount：vitest、jest 的汇总行，取最后一行；认不出时返回 null', () => {
+  assert.deepEqual(passedCount(' Tests  10 failed | 718 passed (728)', ''), { n: 718, by: 'summary' })
+  assert.deepEqual(passedCount('Tests:       1 failed, 99 passed, 100 total', ''), { n: 99, by: 'summary' })
+  assert.deepEqual(passedCount('Tests: 3 passed\nTests: 5 passed', ''), { n: 5, by: 'summary' })
+  assert.equal(passedCount('nothing here', ''), null)
+})
+
+test('compare：比较用整个输出里的关键行（signals），不受输出截断影响', () => {
+  const b = { test: { ...res('…尾部…'), signals: '' } }
+  const a = { test: { ...failing('…中间省略…尾部…'), signals: ' FAIL  t/a.test.js > uses deleted' } }
+  const r = compare({ test: { ...b.test, ok: true, exitCode: 0 } }, a, '')
+  assert.deepEqual(r.test.newFailures, ['t/a.test.js > uses deleted'])
 })

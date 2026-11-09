@@ -4,7 +4,8 @@
  * knip 不认识 import.meta.glob：被它批量加载的文件会被误报为没人用。
  * 所以 scan 先找出这些 glob，作为入口交给 knip。
  *
- * 只认字符串字面量（或字符串组成的数组）：参数是变量、拼接出来的字符串时无法换算，记一条警告
+ * 只认字符串字面量（或字符串组成的数组）。换算不了的（参数是变量、用了没配置的别名）记进 unresolved：
+ * scan 把它们当成确定不了目录的动态加载，按 glob 的模式在全仓库里圈文件，圈到的判 unknown，不当成没人用
  * require.context、拼接路径的 import() 由 dynamic-imports.js 处理
  *
  * 已知限制：
@@ -32,11 +33,13 @@ import { codeOf, lineAt, readString, skipSpace } from './source-text.js'
  * @param {object} opts
  * @param {{path: string, content: string}[]} opts.files 要检查的源码文件（path 相对仓库根目录）
  * @param {Record<string, string>} [opts.aliases] 别名 → 目录
- * @returns {{globs: GlobImport[], warnings: GlobWarning[]}}
+ * @returns {{globs: GlobImport[], warnings: GlobWarning[], unresolved: {from: string, line: number, expr: string, regex: RegExp|null}[]}}
+ *   unresolved.regex：按 glob 的模式在全仓库里匹配文件；null = 参数不是字符串，什么文件都可能
  */
 export function findGlobImports({ files, aliases = {} }) {
   const globs = []
   const warnings = []
+  const unresolved = []
 
   for (const { path, content } of files) {
     if (!content.includes('import.meta.glob')) continue
@@ -45,21 +48,62 @@ export function findGlobImports({ files, aliases = {} }) {
     for (const m of code.matchAll(/import\.meta\.glob(?:Eager)?\s*\(/g)) {
       const line = lineAt(code, m.index)
       const args = readLiterals(code, m.index + m[0].length)
+      const end = code.indexOf(')', m.index)
+      const expr = shorten(code.slice(m.index, end < 0 ? m.index + 80 : end + 1))
       if (args === null) {
-        warnings.push({ from: path, line, detail: 'import.meta.glob 的参数不是字符串，无法换算，被它加载的文件可能被误报为没人用' })
+        warnings.push({ from: path, line, detail: 'import.meta.glob 的参数不是字符串，无法换算：整个仓库的候选都判 unknown（人工确认后可以写进 reviewedDynamicLoads）' })
+        unresolved.push({ from: path, line, expr, regex: null })
         continue
       }
       for (const pattern of args) {
         const resolved = resolvePattern(pattern, path, aliases)
         if (resolved === null) {
-          warnings.push({ from: path, line, detail: `无法换算的 glob 写法：${pattern}，被它加载的文件可能被误报为没人用` })
+          if (pattern.startsWith('!')) continue // 排除写法换算不了：只会多圈，不影响
+          warnings.push({ from: path, line, detail: `无法换算的 glob 写法：${pattern}，按模式在全仓库里圈，圈到的候选判 unknown（别名没配置的话，在 profile 的 aliases 里补上）` })
+          unresolved.push({ from: path, line, expr, regex: globTailRegex(pattern) })
         } else {
           globs.push({ from: path, line, pattern, resolved })
         }
       }
     }
   }
-  return { globs, warnings }
+  return { globs, warnings, unresolved }
+}
+
+/**
+ * 换算不了的 glob 按模式匹配全仓库的文件：去掉开头不认识的前缀（别名、./），剩下的部分对路径结尾匹配
+ *   '~/views/**\/*.vue' → 任何 …/views/…/*.vue；'menu/*.js' → 任何 …/menu/*.js
+ * @returns {RegExp}
+ */
+export function globTailRegex(pattern) {
+  const parts = pattern.replace(/^\.\.?\//, '').split('/')
+  // 第一段不含通配符、又不像目录名（~、@、# 开头的别名）时去掉
+  if (parts.length > 1 && /^[~@#$]/.test(parts[0]) && !/[*?{[]/.test(parts[0])) parts.shift()
+  let re = ''
+  const body = parts.join('/')
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]
+    if (c === '*' && body[i + 1] === '*') {
+      re += body[i + 2] === '/' ? '(?:.*/)?' : '.*'
+      i += body[i + 2] === '/' ? 2 : 1
+    } else if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else if (c === '{') {
+      const close = body.indexOf('}', i)
+      re += `(?:${body.slice(i + 1, close).split(',').map(escapeRe).join('|')})`
+      i = close
+    } else re += escapeRe(c)
+  }
+  return new RegExp(`(?:^|/)${re}$`)
+}
+
+function escapeRe(s) {
+  return s.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+}
+
+function shorten(expr) {
+  const one = expr.replace(/\s+/g, ' ')
+  return one.length > 80 ? `${one.slice(0, 79)}…` : one
 }
 
 /**

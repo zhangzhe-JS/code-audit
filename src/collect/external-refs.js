@@ -8,15 +8,19 @@
  *
  * 按路径匹配（去掉扩展名，带不带扩展名都算），两侧有边界：
  *   src/a 不匹配 src/a.config.js、src/a/b.js、src/ab.js
- * index 文件也认目录写法：src/a/index.js 匹配 'src/a'
+ * index 文件也认目录写法：src/a/index.js 匹配 'src/a'（只认多级目录：'src' 这种顶层目录名太常见）
  * JS 类文件、html 先去掉注释（注释掉的引用不算在用，由 comment-refs 判为注释停用）；json、yml 等原样搜
  *
- * 已知限制：只认从仓库根目录写起的路径（前面可以有 ./、/、../ 等）。
- * 相对配置文件所在目录的写法（如 build/ 下写 '../src/a' 能匹配，但写 'a' 不行）、拼接出来的路径找不到
+ * JS 类文件里还会：
+ * - 按文件所在目录解析引号里的相对路径（build/ 下写 './x' 指 build/x）
+ * - 把 path.join / path.resolve 的各段拼起来（__dirname、process.cwd()、ROOT 这类变量当成文件所在目录或仓库根目录）
+ *
+ * 拼接出来、算不出来的路径（中间有变量），由 findExternalMaybe 兜底：出现了同名文件名就判 unknown，不判死
  */
 import { posix } from 'node:path'
 import { stripComments } from './strip-comments.js'
 import { lineAt } from './source-text.js'
+import { buildLookup, resolveSpec } from './path-refs.js'
 
 /** 要搜的文本文件类型 */
 export const EXTERNAL_EXTENSIONS = Object.freeze([
@@ -59,11 +63,18 @@ export function externalFiles({ all, sourceRoots, extensions, exclude }) {
  * @param {object} opts
  * @param {{path: string, content: string}[]} opts.files  要搜的文件
  * @param {string[]} opts.targets  候选文件
+ * @param {Record<string, string>} [opts.aliases]
  * @returns {Map<string, ExternalRef[]>} 候选文件 → 写着它路径的地方；没有的不在 Map 里
  */
-export function findExternalRefs({ files, targets }) {
+export function findExternalRefs({ files, targets, aliases = {} }) {
   const matchers = targets.map((t) => ({ target: t, forms: formsOf(t) }))
+  const lookup = buildLookup(targets)
   const result = new Map()
+  const add = (target, path, code, index, line = lineAt(code, index)) => {
+    const refs = result.get(target) ?? []
+    if (!refs.some((r) => r.from === path && r.line === line)) refs.push({ from: path, line, text: lineText(code, line) })
+    result.set(target, refs)
+  }
   for (const { path, content } of files) {
     const code = JS_LIKE.some((e) => path.endsWith(e))
       ? stripComments(content)
@@ -73,18 +84,86 @@ export function findExternalRefs({ files, targets }) {
     for (const { target, forms } of matchers) {
       for (const form of forms) {
         if (!code.includes(form.text)) continue
-        for (const m of code.matchAll(form.re)) {
-          const line = lineAt(code, m.index)
-          const refs = result.get(target) ?? []
-          if (!refs.some((r) => r.from === path && r.line === line)) {
-            refs.push({ from: path, line, text: snippet(code, m.index) })
-          }
-          result.set(target, refs)
-        }
+        for (const m of code.matchAll(form.re)) add(target, path, code, m.index)
       }
+    }
+    if (!JS_LIKE.some((e) => path.endsWith(e))) continue
+    // 相对这个文件的路径：'./x'、'../src/x'
+    for (const m of code.matchAll(/(["'`])(\.\.?\/[^"'`\n]+)\1/g)) {
+      const resolved = resolveSpec(m[2], path, aliases)
+      for (const target of lookup.get(resolved) ?? []) add(target, path, code, m.index)
+    }
+    // path.join / path.resolve 的各段都能算出来时，拼起来
+    for (const { line, candidates } of joinedPaths(code, path)) {
+      for (const p of candidates) for (const target of lookup.get(p) ?? []) add(target, path, code, 0, line)
     }
   }
   for (const refs of result.values()) refs.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : a.line - b.line))
+  return result
+}
+
+/**
+ * path.join(...) / path.resolve(...)：各段是字符串、__dirname、process.cwd() 或一个变量（如 ROOT）时拼出路径
+ * 变量不知道指哪里：按仓库根目录和文件所在目录各算一次
+ * @returns {{line: number, candidates: string[]}[]}
+ */
+export function joinedPaths(code, from) {
+  const out = []
+  const text = code.replace(/process\.cwd\(\)/g, '__CWD__')
+  for (const m of text.matchAll(/\bpath\.(?:join|resolve)\s*\(([^()]*)\)/g)) {
+    const args = m[1].split(',').map((a) => a.trim()).filter(Boolean)
+    if (args.length === 0) continue
+    const segs = []
+    let bases = ['']
+    let ok = true
+    args.forEach((a, i) => {
+      const lit = a.match(/^(["'`])([^"'`]*)\1$/)
+      if (lit) segs.push(lit[2])
+      else if (i === 0 && a === '__dirname') bases = [posix.dirname(from)]
+      else if (i === 0 && a === '__CWD__') bases = ['']
+      else if (i === 0 && /^[A-Za-z_$][\w$.]*$/.test(a)) bases = ['', posix.dirname(from)]
+      else ok = false
+    })
+    if (!ok || segs.length === 0) continue
+    const candidates = bases
+      .map((b) => posix.normalize(posix.join(b, ...segs.map((s) => s.replace(/^\//, '')))).replace(/\/+$/, ''))
+      .filter((p) => p !== '.' && !p.startsWith('../'))
+    // 换占位符不会增减换行：在替换后的文本里算的行号就是原文的行号
+    out.push({ line: lineAt(text, m.index), candidates })
+  }
+  return out
+}
+
+/** 第几行的内容，压缩空白、过长截断 */
+function lineText(code, line) {
+  return shortenLine(code.split('\n')[line - 1] ?? '')
+}
+
+/**
+ * 兜底：算不出路径（中间有变量）时，引号里出现了候选的文件名（带扩展名），就可能是拼出来的路径
+ * 只用带扩展名的文件名，index.* 不算（太常见）；已经确认是 external 的不再报
+ * @param {object} opts
+ * @param {{path: string, content: string}[]} opts.files
+ * @param {string[]} opts.targets
+ * @param {Map<string, ExternalRef[]>} opts.found  findExternalRefs 已经找到的
+ * @returns {Map<string, ExternalRef[]>}
+ */
+export function findExternalMaybe({ files, targets, found }) {
+  const result = new Map()
+  const names = targets
+    .filter((t) => !found.has(t) && !/^index\./.test(posix.basename(t)))
+    .map((t) => ({ target: t, re: new RegExp(`(["'\`])[^"'\`\n]*(?<![\\w.-])${escape(posix.basename(t))}\\1`, 'g') }))
+  for (const { path, content } of files) {
+    const code = JS_LIKE.some((e) => path.endsWith(e)) ? stripComments(content) : content
+    for (const { target, re } of names) {
+      for (const m of code.matchAll(re)) {
+        const line = lineAt(code, m.index)
+        const refs = result.get(target) ?? []
+        if (!refs.some((r) => r.from === path && r.line === line)) refs.push({ from: path, line, text: lineText(code, line) })
+        result.set(target, refs)
+      }
+    }
+  }
   return result
 }
 
@@ -97,7 +176,7 @@ function formsOf(file) {
   const ext = posix.extname(file)
   const stem = ext ? file.slice(0, -ext.length) : file
   const forms = [{ text: stem, re: bounded(escape(stem) + (ext ? `(?:${escape(ext)})?` : '')) }]
-  if (posix.basename(stem) === 'index' && posix.dirname(stem) !== '.') {
+  if (posix.basename(stem) === 'index' && posix.dirname(stem).includes('/')) {
     const dir = posix.dirname(stem)
     forms.push({ text: dir, re: bounded(`${escape(dir)}/?`) })
   }
@@ -118,9 +197,7 @@ function escape(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function snippet(code, index) {
-  const start = code.lastIndexOf('\n', index) + 1
-  const end = code.indexOf('\n', index)
-  const line = code.slice(start, end < 0 ? code.length : end).replace(/\s+/g, ' ').trim()
+function shortenLine(text) {
+  const line = text.replace(/\s+/g, ' ').trim()
   return line.length > SNIPPET_MAX ? `${line.slice(0, SNIPPET_MAX - 1)}…` : line
 }

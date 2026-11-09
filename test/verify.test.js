@@ -211,3 +211,30 @@ test('verify 命令：试跑基线，命令在临时目录里跑，原项目不�
   t.after(() => rmSync(kept, { recursive: true, force: true }))
   assert.ok(existsSync(join(kept, 'logs/test.log')))
 })
+
+test('runCommand：输出很长时完整写进日志文件；内存里留开头和结尾；开头的关键行不丢', async (t) => {
+  const dir = tempDir(t)
+  const logFile = join(dir, 'out.log')
+  const cmd =
+    "node -e \"console.log(' FAIL  t/a.test.js > early'); for (let i = 0; i < 60000; i++) console.log('line ' + i + ' ' + 'x'.repeat(40)); process.stderr.write('tail without newline')\""
+  const r = await runCommand(cmd, { cwd: dir, timeoutSeconds: 60, logFile })
+  assert.equal(r.truncated, true)
+  assert.ok(r.output.length <= 2.1 * 1024 * 1024)
+  assert.ok(r.output.startsWith(' FAIL  t/a.test.js > early'))
+  assert.match(r.output, /中间省略 \d+ 个字符，完整输出见日志文件/)
+  assert.ok(r.output.endsWith('tail without newline\n'))
+  assert.match(r.signals, /FAIL {2}t\/a\.test\.js > early/)
+  const log = readFileSync(logFile, 'utf8')
+  assert.ok(log.includes('line 59999'))
+  assert.ok(log.includes('line 0 '))
+  assert.ok(!log.includes('中间省略'))
+})
+
+test('runCommand：stdout、stderr 的半行各自拼接，不会混在一起', async (t) => {
+  const dir = tempDir(t)
+  const cmd = "node -e \"process.stdout.write('ou'); process.stderr.write('er'); setTimeout(() => { process.stdout.write('t-line\\n'); process.stderr.write('r-line\\n'); process.stdout.write('stdout last') }, 50)\""
+  const r = await runCommand(cmd, { cwd: dir, timeoutSeconds: 30 })
+  assert.match(r.output, /^out-line$/m)
+  assert.match(r.output, /^err-line$/m)
+  assert.match(r.output, /^stdout last$/m) // 最后一行没有换行也不丢
+})

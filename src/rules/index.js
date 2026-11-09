@@ -17,16 +17,27 @@ import { externalRule } from './external.js'
 import { dormantRule } from './dormant.js'
 import { testOnlyRule } from './test-only.js'
 import { pendingRule } from './pending.js'
+import { commentedTagRule, maybeAutoImportRule, maybeExternalRule, sameNameTagRule } from './blind-spots.js'
 import { best, propagate } from './graph.js'
 import { inScope } from '../collect/dynamic-imports.js'
 
 /** 逐个文件跑的规则；顺序只影响证据的先后，状态按 STATUSES 取 */
-const RULES = [dynamicLoadRule, externalRule, pendingRule, dormantRule, testOnlyRule]
+const RULES = [
+  dynamicLoadRule,
+  sameNameTagRule,
+  maybeAutoImportRule,
+  maybeExternalRule,
+  externalRule,
+  pendingRule,
+  dormantRule,
+  commentedTagRule,
+  testOnlyRule
+]
 
 /** dead 的证据：排除了哪些情况 */
 export const NO_REF = Object.freeze({
   rule: 'no-ref',
-  detail: '没有命中任何需要保留的情况（动态加载、构建配置等图外使用、没合并的分支、注释掉的引用、测试引用），也没有被其他候选引用'
+  detail: '没有命中任何需要保留的情况（动态加载、构建配置等图外使用、没合并的分支、注释掉的引用、测试引用、同名标签等盲区兜底），也没有被其他候选引用'
 })
 
 /**
@@ -36,6 +47,10 @@ export const NO_REF = Object.freeze({
  * @property {Map<string, import('../collect/comment-refs.js').CommentRef[]>} commentRefs  在用的文件里注释掉的引用
  * @property {Map<string, import('../collect/path-refs.js').ImportRef[]>} testRefs  测试文件里的 import
  * @property {Map<string, import('../collect/branch-refs.js').BranchRef[]>} branchRefs  没合并的分支里的引用
+ * @property {Map<string, {from: string, line: number, tag: string}[]>} sameNameTags  兜底：在用的模板里的同名标签
+ * @property {Map<string, {from: string, line: number, tag: string}[]>} commentedTags  兜底：模板注释里的同名标签
+ * @property {Map<string, {from: string, line: number, name: string}[]>} bareExports  兜底：疑似自动导入
+ * @property {Map<string, import('../collect/external-refs.js').ExternalRef[]>} externalMaybe  兜底：拼出来的路径
  * @property {Map<string, string>} knipRules  候选 → knip 证据的规则名
  * @property {Set<string>} candidates  所有候选文件
  */
@@ -56,6 +71,7 @@ export const NO_REF = Object.freeze({
  * @param {RuleContext['commentRefs']} [opts.commentRefs]
  * @param {RuleContext['testRefs']} [opts.testRefs]
  * @param {RuleContext['branchRefs']} [opts.branchRefs]
+ * @param {{sameNameTags?: RuleContext['sameNameTags'], commentedTags?: RuleContext['commentedTags'], bareExports?: RuleContext['bareExports'], externalMaybe?: RuleContext['externalMaybe']}} [opts.blindSpots] 盲区兜底
  * @param {Map<string, import('../collect/path-refs.js').ImportRef[]>} [opts.importers]  候选 → 引用它的候选
  * @param {((file: string, ctx: RuleContext) => RuleHit | null)[]} [opts.rules] 测试时可以替换
  * @returns {{file: string, status: string, evidence: object[], refs: object[]}[]}
@@ -68,6 +84,7 @@ export function judge({
   commentRefs = new Map(),
   testRefs = new Map(),
   branchRefs = new Map(),
+  blindSpots = {},
   importers = new Map(),
   rules = RULES
 }) {
@@ -77,6 +94,10 @@ export function judge({
     commentRefs,
     testRefs,
     branchRefs,
+    sameNameTags: blindSpots.sameNameTags ?? new Map(),
+    commentedTags: blindSpots.commentedTags ?? new Map(),
+    bareExports: blindSpots.bareExports ?? new Map(),
+    externalMaybe: blindSpots.externalMaybe ?? new Map(),
     knipRules: new Map(files.map((f) => [f.file, f.evidence[0]?.rule])),
     candidates: new Set(files.map((f) => f.file))
   }

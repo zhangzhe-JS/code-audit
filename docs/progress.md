@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：388 个，全部通过（`npm test`）
+- 测试：412 个，全部通过（`npm test`）
 
 ---
 
@@ -321,7 +321,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 
 - [x] `src/verify/workspace.js`：导出提交里的全部文件，克隆 node_modules；node_modules 本身是软链接时克隆它指向的目录；出错时清掉临时目录
 - [x] `src/verify/run-command.js`：按 shell 命令执行，stdout / stderr 按时间顺序合并、去颜色、过长只留结尾；超时结束整个进程组
-- [x] `src/verify/baseline.js`：按 build、test 的顺序跑配置了的步骤，命令输出写进日志目录（当前最多保留末尾 2 MB）
+- [x] `src/verify/baseline.js`：按 build、test 的顺序跑配置了的步骤，完整输出写进日志目录（不截断，见下面「已知问题排查」）
 - [x] `code-audit verify --root --profile [--rev] [--keep]`：试跑基线，确认命令能在临时目录里跑通；失败时打印最后 30 行，退出码为 1
 - [x] 配置新增 `verify`，按字段合并（只写 build 也行）
 - [x] finicr-web 实测（build: `pnpm run build:ci`，test: `pnpm test`）：
@@ -390,6 +390,30 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 - 目标项目 `git status` 不变，临时目录没有残留
 - 注意：全局注册的组件删错了，构建不会报错（Vue 运行时才警告），verify 兜不住，只能靠 scan 认准标签用法
 
+## 盲区兜底
+
+原则：**看不准的不判死**。先认出「这里有盲区」，可能受影响的候选判 unknown（或 dormant），证据写明看到了什么、为什么不能确认、怎么放过；
+不是只在已知问题里记一笔。
+
+| 盲区 | 兜底 | 怎么放过 |
+|---|---|---|
+| ① 动态组件名字是变量：`:is="name"`、`resolveComponent(name)` | 项目有全局注册的组件时，当成范围确定不了的动态加载：全局组件里的候选判 unknown（装了自动注册插件却没有声明文件时，所有 .vue 都算） | 人工确认后写进 `reviewedDynamicLoads`（from + expr） |
+| ② 全局注册没声明文件、手写注册、别处同名组件 | 在用的模板里有和候选同名的标签（文件名推组件名，index.vue 用目录名），又不是那个文件 import 进来的 → unknown；只在模板注释里出现 → dormant | 看证据人工处理 |
+| ③ glob 换算不了（别名没配置） | 按 glob 的模式在全仓库里圈（`~/views/**/*.vue` → 任何 …/views/…/*.vue），圈到的判 unknown；参数不是字符串的整个仓库 | profile 里补上别名，或写进 `reviewedDynamicLoads` |
+| ④ 自动导入的本地函数（unplugin-auto-import） | 精确处理：读出声明文件里登记的本地函数，按名字找用法补成引用；声明文件不算引用。装了插件却没有声明文件时兜底：候选导出的名字在用的代码里被直接用到、又没 import → unknown | 看证据人工处理 |
+| ⑤ external：相对配置文件目录的路径、`path.join` 拼的路径 | 能算的算出来（按文件所在目录解析；path.join / resolve 各段是字面量、__dirname、process.cwd()、变量时拼起来）；算不出来的，出现了同名文件名（带扩展名，index.* 除外）→ unknown | 看证据人工处理 |
+| ⑥ yml、sh 的 `#` 注释 | 认 # 注释里的路径（不带引号也认），判 dormant | — |
+| ⑦ 远程分支以上次 fetch 为准 | 工具不 fetch；上次 fetch 超过 7 天或找不到记录时，输出里提醒 | 先 git fetch 再 scan |
+
+实现：`src/rules/blind-spots.js`（同名标签、注释里的同名标签、疑似自动导入、疑似拼出来的路径）、`src/collect/auto-imports.js`，
+`global-components.js`、`glob-imports.js`、`external-refs.js`、`comment-refs.js`、`branch-refs.js` 各自补上对应的部分。
+
+实测：
+- finicr-web：状态分布不变；`ResolutionTip` 多一条证据（`App.vue:12` 的模板注释里有 `<ResolutionTip>`）
+- findip-portal-web：项目里有 12 处 `:is="变量"`，`BasicModal`、`KatexRender` 从 dead 变为 unknown（它们是全局组件，排除不了某个变量的值正好是它）。
+  人工确认这 12 处都只会是图标、路由组件后，写进 `reviewedDynamicLoads` 才会回到 dead
+- 反向检查：逐个撤掉 18 处关键逻辑，每处都有测试失败
+
 ## 已知问题
 
 修好一个就划掉，并写上提交号。
@@ -398,25 +422,20 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 |---|---|---|
 | pattern 按字面搜索，同目录下的相对路径引用（`import './x.js'`）搜不到 | 可能漏掉引用 | 中。等 scan 完成后改用精确引用 |
 | 除号 / 正则的判断在 `a++ / b / c` 这类写法下会出错 | 最多少去掉一段注释 | 低 |
-| `.vue` 模板里的 `<!-- -->` 不处理 | 被注释掉的组件仍算作引用 | 低。等 vue 插件处理 |
+| history：`.vue` 模板里的 `<!-- -->` 不处理（只去 JS 注释） | 被注释掉的组件仍算作引用 | 低。不会误删 |
 | 引用方文件改名，记成一次 remove 加一次 add | 时间线多两条记录 | 低。不影响失去引用的判断 |
 | 引用按完整路径匹配，但 `utils/math` 仍会匹配 `utils/math.config`（点号后面无法区分扩展名和文件名） | 可能多算引用 | 低。不会误删 |
 | 表格里合并提交的说明很长（带仓库地址），会把「失去引用」列撑得很宽 | 只影响阅读 | 低。以后可以加配置截断提交说明 |
 | 引入取的是合并提交时，看不到分支上真正写代码的人 | 报告里作者显示为合并的人 | 低。可以以后在报告里展开合并提交 |
-| history 的 pattern 会匹配到同名目录下的其他文件：`config/field`（指 field/index.js）也匹配 `config/field/xxx` | 多算引用，显示「仍被引用」 | 低。不会误删；M4 改用 knip 的精确引用 |
+| history 的 pattern 会匹配到同名目录下的其他文件：`config/field`（指 field/index.js）也匹配 `config/field/xxx` | 多算引用，显示「仍被引用」 | 低。不会误删；以后可以改用 scan 的引用关系 |
 | history 的 pattern 会匹配到接口地址等字符串：`api/document` 匹配 `'/api/document/stream'` | 多算引用 | 低。不会误删 |
 | scan：写 import.meta.glob 的文件本身没人用时，被它加载的文件也当成在用 | 少报 | 低。不会误删 |
 | 字符串里出现 `import(`、`require(` 字样时也会当成调用 | 多圈文件、多发警告 | 低。不会误删 |
-| external 只认从仓库根目录写起的路径：配置里相对自身目录的写法（如 `build/` 下写 `'./x'`）、拼接出来的路径找不到 | 漏判 external，可能落到 dead | 中。实删前还有 verify（构建会报错） |
 | external：省略扩展名的路径同时也是目录名时（`'src/i18n/menu'` 指目录），也算引用了 `src/i18n/menu.js` | 多一条证据 | 低。模块解析本来也是文件优先 |
-| dormant：`.vue` 模板里注释掉的组件标签（`<!-- <Tip /> -->`）不认，只认注释掉的 import | 只注释了标签、没注释 import 时漏判 | 低。组件仍被 import，不会是候选 |
-| dormant：yml 的 `#` 注释不搜 | 可能漏判 | 低 |
 | pending：hotfix 用 cherry-pick 合回主线时，git 仍认为分支没合并，已经摘过来的改动也会判 pending | 多判 pending | 低。不会误删；不会再合回来的分支在 branches.ignore 里排除 |
-| pending：远程分支以上次 fetch 为准，scan 不 fetch | 别人新推的分支看不到 | 中。scan 前自己 fetch 一下 |
-| 全局注册的组件只认声明文件里登记了的：自动注册但关掉了声明文件（dts: false）、手写全局注册又没写声明的，模板里的用法看不到 | 在用的组件会被当成没人用；构建不会报错（运行时才警告），verify 也发现不了 | 中。这种项目要把组件目录写进 entries 或 scanIgnore |
-| 自动导入（unplugin-auto-import）的本地目录（dirs）：不 import 就能用的本地函数看不到 | 同上 | 中。目前遇到的项目只自动导入第三方库，不受影响 |
-| verify：命令输出超过 2 MB 时只保留末尾，日志缺少开头部分（但 baseline 注释称完整输出） | 早期诊断信息丢失，排查构建 / 测试失败不完整 | 低。仅影响诊断记录，不影响退出码判断 |
-| verify：基线测试已有可识别失败时，删文件后若测试因未识别错误退出、但仍打印原有失败行，比较逻辑只看新增失败用例而不看新的非零退出码 | 可能把实际已坏的删除组合误判为通过 | 中。需要同时比较退出状态和已识别失败用例 |
+| pending：远程分支以上次 fetch 为准，scan 不 fetch | 别人新推的分支看不到 | 中。上次 fetch 超过 7 天时输出里提醒（兜底 ⑦） |
+| 兜底是按名字的：同名标签、导出名、文件名都可能撞名，会多判 unknown | 多判 unknown，要人工看 | 低。不会误删；证据里写明是哪个文件哪一行 |
+| 动态组件的名字是变量时只能整批放过（reviewedDynamicLoads 按 from + expr 逐处确认），处数多时要写很多条 | 配置繁琐 | 低 |
 
 已确认不是问题：
 
@@ -424,6 +443,15 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 已修复：
 
+- ~~全局组件的名字是变量时认不出~~、~~自动注册没有声明文件时模板用法看不到~~、~~自动导入的本地函数看不到~~、
+  ~~external 只认从仓库根目录写起的路径~~、~~dormant 不认模板里注释掉的标签和 yml 注释~~：都改为兜底（见「盲区兜底」），看不准的判 unknown / dormant，不判死
+- ~~verify：基线测试本来就有失败时，只比「新增失败的用例」~~：实测测试整个崩掉（一条 FAIL 都没打）、退出码变了、通过的用例从 99 降到 50，都被判为通过。
+  只比退出码也不够（基线本来就是 1，崩了也是 1）。现在还比：退出码变了；基线认得出失败的用例、删后一个都认不出又没成功；通过的用例变少（读汇总行，没有时数 ✓ / PASS）
+- ~~verify：命令输出超过 2 MB 只留结尾~~：不只影响排查——jest 这类工具一开始就打印失败的用例，截掉后比较时认不出。
+  现在完整输出边跑边写进日志文件（不截断）；内存里留开头 256 KB 和结尾 1.75 MB，中间注明省略了多少；
+  关键行（失败、警告、通过、汇总、报错）整个输出一行不漏地另外收着，比较只用它们。stdout、stderr 的半行各自拼接
+- ~~全局组件的标签扫描没先去掉模板里的 HTML 注释~~：去掉注释（行号不变），注释里的标签不算使用
+- ~~全局组件只认显式标签~~：还认写死名字的动态组件（`is="X"`、`is="vue:X"`、`:is="'X'"`、`v-bind:is="'X'"`）和脚本里的 `resolveComponent('X')`；名字是变量的仍认不出（见上表）
 - ~~动态加载的路径开头就是变量（`import(path)`）时范围确定不了，只发警告~~：圈整个仓库（按结尾、正则缩小），范围里的判 unknown；人工确认后写进 `reviewedDynamicLoads` 放过
 - ~~符号链接能绕过「输出不能写进目标仓库」的检查~~：两边都换成真实路径再比较；输出位置还不存在时按最近一级存在的父目录解析；失效的符号链接直接报错
 - ~~输出文件逐个写入，中途出错会留下半成品~~：目录先写到同级临时目录再改名；单个文件先写临时文件再用硬链接放到位（目标已存在时会失败，不会覆盖）

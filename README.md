@@ -165,7 +165,9 @@ branches: { ignore: ['origin/release/**'], maxAgeDays: 180 }  // 默认都查
 
 只有测试用到的判为 `test-only`，列出引用它的测试。候选之间的 import 会顺着传递：被要保留的文件（如 external）引用的，跟着保留；只被同样没人用的文件引用的，判为 `dead-only-ref`，跟着引用方一起处理。
 
-Vue 全局注册的组件（unplugin-vue-components 生成的 `components.d.ts` 等，里面有 `interface GlobalComponents`）：模板里写标签就能用，不用 import。scan 读出登记的组件，按模板里的标签（`<BasicTable>`、`<basic-table>`）认出用法，交给 knip；声明文件本身不算引用。
+Vue 全局注册的组件（unplugin-vue-components 生成的 `components.d.ts` 等，里面有 `interface GlobalComponents`）：模板里写标签就能用，不用 import。scan 读出登记的组件，按模板里的标签（`<BasicTable>`、`<basic-table>`）、写死名字的动态组件（`is="X"`、`:is="'X'"`）和 `resolveComponent('X')` 认出用法，交给 knip；声明文件本身、注释里的不算。名字是变量的（`:is="name"`）认不出。
+
+**盲区兜底：看不准的不判死。** 静态分析有认不出的写法（动态组件名字是变量、全局注册没有声明文件、别名没配置的 glob、自动导入、拼出来的路径等）。scan 会先认出这些盲区，可能受影响的候选判 `unknown`（注释里出现的判 `dormant`），证据写明看到了什么、为什么不能确认。动态加载类的盲区，人工确认后写进 `reviewedDynamicLoads` 才放过。明细见 `docs/progress.md` 的「盲区兜底」。
 
 源码里有 `.vue` 而 package.json 没声明 vue 时（monorepo、没有 package.json），knip 会跳过 .vue 文件。scan 只在临时目录里补上依赖声明，输出里会提示。
 
@@ -238,7 +240,8 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js --in
 node bin/code-audit.js report --profile profiles/my-app.js --in reports/my-app/verified.json --out reports/my-app/out
 ```
 
-- 只看新增的问题：基线本来就失败的测试、本来就有的警告不算
+- 只看新增的问题：基线本来就失败的测试、本来就有的警告不算。基线本来就有失败时，还会比退出码、通过的用例数，测试整个崩了也能发现
+- 完整输出写进日志（不截断）；比较用整个输出里的关键行（失败、警告、通过、汇总、报错），输出再长也不漏
 - 全部删掉没问题，一般 2 轮就结束；有问题时先从报错里认出是哪些文件，认不出再对半找（最多 40 轮）
 - 有 import 关系的候选绑在一起删（引用方和被引用的），不会冤枉被引用的
 - 删了会出问题的，状态改为 `unknown`，证据写上出了什么问题；新增的构建警告列出来给人看，不算失败

@@ -7,7 +7,15 @@
  * - 测试：失败的测试。不同测试工具的格式不同，按常见写法认：
  *     vitest / jest：FAIL  src/a.test.js > 分组 > 用例
  *     各种 reporter：✗ × ✕ 开头的行
- *   认不出是哪些测试失败时，退回按「成功 / 失败」比较
+ *   只比失败的用例不够：基线本来就有失败时，退出码本来就不是 0，删坏了（测试工具整个崩了、
+ *   少跑了一批用例）也可能只打印出原来那几条失败。所以还要比：
+ *   - 退出码变了
+ *   - 基线认得出失败的用例，删后一个都认不出，又没成功：测试多半没正常跑完
+ *   - 通过的用例变少（读汇总行「Tests … 718 passed」，没有汇总行时数 ✓ / PASS 开头的行）
+ *   基线成功、删后失败又认不出是哪些测试时，按「成功 / 失败」比较
+ *
+ * 输出很长时只保留开头和结尾（run-command.js），但关键行（失败、警告、通过、汇总、报错）一行不漏地另外收着，
+ * 比较时用的是关键行，不受截断影响
  *
  * 比较前先归一化：去掉临时目录的绝对路径、耗时、数字，避免每次运行都不一样的内容被当成「新增」
  */
@@ -36,32 +44,62 @@ export function compare(baseline, current, workDir) {
   for (const step of Object.keys(current)) {
     const before = baseline[step]
     const after = current[step]
-    const beforeLines = new Set(lines(before.output, workDir))
-    const added = lines(after.output, workDir).filter((l) => !beforeLines.has(l))
+    const beforeLines = new Set([...lines(before.output, workDir), ...lines(before.signals ?? '', workDir)])
+    const added = unique([...lines(after.output, workDir), ...lines(after.signals ?? '', workDir)]).filter((l) => !beforeLines.has(l))
     newLines.push(...added)
 
     if (step === 'build') {
       result.build.ok = after.ok
       if (before.ok && !after.ok) problems.push(after.timedOut ? '构建超时' : `构建失败（退出码 ${after.exitCode}）`)
-      const was = new Set(warnings(before.output, workDir))
-      result.build.newWarnings = unique(warnings(after.output, workDir).filter((w) => !was.has(w)))
+      const was = new Set(warnings(full(before), workDir))
+      result.build.newWarnings = unique(warnings(full(after), workDir).filter((w) => !was.has(w)))
     } else if (step === 'test') {
-      const was = failures(before.output, workDir)
-      const now = failures(after.output, workDir)
-      if (now.length > 0 || was.length > 0) {
-        const old = new Set(was)
-        result.test.newFailures = unique(now.filter((f) => !old.has(f)))
-        if (result.test.newFailures.length > 0) problems.push(`新增失败的测试 ${result.test.newFailures.length} 个`)
-      } else if (before.ok && !after.ok) {
-        // 认不出是哪些测试：按成功 / 失败比较
-        result.test.newFailures = [after.timedOut ? '测试超时' : `测试失败（退出码 ${after.exitCode}，认不出是哪些测试）`]
-        problems.push(result.test.newFailures[0])
+      const was = failures(full(before), workDir)
+      const now = failures(full(after), workDir)
+      const old = new Set(was)
+      result.test.newFailures = unique(now.filter((f) => !old.has(f)))
+      if (result.test.newFailures.length > 0) problems.push(`新增失败的测试 ${result.test.newFailures.length} 个`)
+      // 认不出具体用例、但能看出变差了：写进 newFailures（报告里显示），也算问题
+      const worse = (msg) => {
+        result.test.newFailures.push(msg)
+        problems.push(msg)
       }
-      if (after.timedOut && !before.timedOut && !problems.includes('测试超时')) problems.push('测试超时')
+      if (after.timedOut && !before.timedOut) {
+        worse('测试超时')
+      } else if (!after.ok) {
+        if (before.ok && result.test.newFailures.length === 0) {
+          worse(`测试失败（退出码 ${after.exitCode}，认不出是哪些测试）`)
+        } else if (!before.ok && after.exitCode !== before.exitCode) {
+          worse(`测试的退出码从 ${before.exitCode} 变成 ${after.exitCode}`)
+        } else if (!before.ok && was.length > 0 && now.length === 0) {
+          worse('测试没有正常跑完：基线认得出失败的用例，删后一个都认不出（可能整个崩了）')
+        }
+      }
+      const pb = passedCount(full(before), workDir)
+      const pa = passedCount(full(after), workDir)
+      if (pb && pa && pb.by === pa.by && pa.n < pb.n) worse(`通过的测试变少了：${pb.n} → ${pa.n}`)
     }
   }
   result.passed = problems.length === 0
   return result
+}
+
+/** 用来比较的文本：有关键行（整个输出里一行不漏收集的）就用关键行，否则用保留下来的输出 */
+function full(r) {
+  return r.signals ?? r.output
+}
+
+/**
+ * 通过的用例数：优先读汇总行（vitest「Tests  10 failed | 718 passed (728)」、jest「Tests: 1 failed, 99 passed, 100 total」），
+ * 没有汇总行时数 ✓ / ✔ / PASS 开头的行。都没有返回 null（不比较）
+ * @returns {{n: number, by: 'summary'|'marks'} | null}
+ */
+export function passedCount(output, workDir) {
+  const all = lines(output, workDir)
+  const summary = all.filter((l) => /^Tests?:?\s/.test(l)).map((l) => l.match(/(\d+) passed/)).filter(Boolean).at(-1)
+  if (summary) return { n: Number(summary[1]), by: 'summary' }
+  const marks = all.filter((l) => /^(PASS\b|[✓✔]\s)/.test(l)).length
+  return marks > 0 ? { n: marks, by: 'marks' } : null
 }
 
 /** 归一化后的非空行 */

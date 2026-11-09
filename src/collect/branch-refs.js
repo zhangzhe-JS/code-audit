@@ -8,6 +8,8 @@
  *
  * 只读：只读本地已有的分支（含远程跟踪分支 origin/xxx），不 fetch；远程分支以上次 fetch 的为准
  */
+import { existsSync, statSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import { git } from '../history/git.js'
 import { findImportRefs } from './path-refs.js'
 
@@ -25,6 +27,7 @@ import { findImportRefs } from './path-refs.js'
  * @property {Map<string, BranchRef[]>} refs  候选 → 别的分支里的引用
  * @property {{name: string, date: string}[]} checked  查过的分支
  * @property {{name: string, reason: string}[]} skipped  没查的分支和原因
+ * @property {{count: number, lastFetchDays: number|null}} remotes  远程跟踪分支有几个、上次 fetch 是几天前（null = 没 fetch 过）
  */
 
 /**
@@ -41,7 +44,8 @@ export function findBranchRefs({ root, rev, targets, extensions, aliases = {}, b
   const refs = new Map()
   const checked = []
   const skipped = []
-  if (targets.length === 0) return { refs, checked, skipped }
+  const remotes = lastFetch(root)
+  if (targets.length === 0) return { refs, checked, skipped, remotes }
 
   const revTime = Number(git(root, ['log', '-1', '--format=%ct', rev]))
   const ignore = branches.ignore.map(globToRegExp)
@@ -96,7 +100,20 @@ export function findBranchRefs({ root, rev, targets, extensions, aliases = {}, b
       for (const r of list) add(target, { branch, date, kind: 'import', from: r.from, line: r.line })
     }
   }
-  return { refs, checked, skipped }
+  return { refs, checked, skipped, remotes }
+}
+
+/**
+ * 远程跟踪分支以上次 fetch 为准，scan 不 fetch：上次 fetch 太久的话，别人新推的分支看不到。
+ * 读 FETCH_HEAD 的修改时间（每次 fetch 都会更新）
+ * @returns {{count: number, lastFetchDays: number|null}}
+ */
+export function lastFetch(root) {
+  const count = git(root, ['for-each-ref', '--format=%(refname)', 'refs/remotes']).split('\n').filter(Boolean).length
+  const p = git(root, ['rev-parse', '--git-path', 'FETCH_HEAD'])
+  const file = isAbsolute(p) ? p : join(root, p)
+  const lastFetchDays = existsSync(file) ? Math.floor((Date.now() - statSync(file).mtimeMs) / 86400000) : null
+  return { count, lastFetchDays }
 }
 
 /**

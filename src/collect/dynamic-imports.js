@@ -22,9 +22,11 @@ import { codeOf, lineAt, readString } from './source-text.js'
  * @typedef {object} DynamicLoad
  * @property {string} from  写这处加载的文件
  * @property {number} line
- * @property {'import'|'require'|'require.context'} kind
+ * @property {'import'|'require'|'require.context'|'import.meta.glob'|'component'} kind
+ *   import.meta.glob：换算不了的 glob（scan 补进来）；component：名字是变量的动态组件（scan 补进来）
  * @property {string} expr  代码里的写法，压成一行，过长截断
  * @property {LoadScope} scope  可能加载哪些文件
+ * @property {string} [note]  为什么判 unknown、怎么放过；不写时按 kind 生成
  */
 
 /**
@@ -35,6 +37,7 @@ import { codeOf, lineAt, readString } from './source-text.js'
  * @property {string} prefix      相对 dir 的路径的开头（require.context 时为空）
  * @property {string} suffix      结尾（require.context 时为空）
  * @property {RegExp|null} regex  require.context 的正则：对「./相对 dir 的路径」测试；null = 不限
+ * @property {Set<string>} [files] 直接给出可能用到的文件（名字是变量的动态组件：所有全局组件）；有它时只看它
  */
 
 const CALLS = /(?<![\w$.])(import|require\.context|require)\s*\(/g
@@ -70,6 +73,7 @@ export function findDynamicLoads({ files, aliases = {} }) {
  * @param {LoadScope} scope
  */
 export function inScope(file, scope) {
+  if (scope.files) return scope.files.has(file)
   if (scope.dir !== '' && !file.startsWith(`${scope.dir}/`)) return false
   const rel = scope.dir === '' ? file : file.slice(scope.dir.length + 1)
   if (!scope.recursive && rel.includes('/')) return false
@@ -116,7 +120,7 @@ function contextScope(args, from, aliases) {
   return { dir, wide: false, recursive, prefix: '', suffix: '', regex }
 }
 
-function wideScope(suffix, regex) {
+export function wideScope(suffix, regex) {
   return { dir: '', wide: true, recursive: true, prefix: '', suffix, regex }
 }
 

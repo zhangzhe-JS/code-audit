@@ -25,7 +25,10 @@ import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external
 import { findCommentRefs } from './comment-refs.js'
 import { findImportRefs } from './path-refs.js'
 import { findBranchRefs } from './branch-refs.js'
-import { findGlobalComponents, findTagUses, injectImports, mergeRefs } from './global-components.js'
+import { findComponentVarUses, findGlobalComponents, findSameNameTags, findTagUses, injectImports, mergeRefs } from './global-components.js'
+import { findAutoImports, findBareExportUses, findNameUses } from './auto-imports.js'
+import { findExternalMaybe } from './external-refs.js'
+import { wideScope } from './dynamic-imports.js'
 import { judge } from '../rules/index.js'
 
 /**
@@ -110,16 +113,24 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
 
   // 2. import.meta.glob → 入口
   const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-  const { globs: globImports, warnings } = findGlobImports({ files: contents, aliases: config.aliases })
+  const { globs: globImports, warnings, unresolved: unresolvedGlobs } = findGlobImports({ files: contents, aliases: config.aliases })
   const globEntries = [...new Set(globImports.map((g) => g.resolved))]
   // 测试文件：在临时目录被改动（下面补 import）之前读出原样
   const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
 
   // 全局注册的组件（见 global-components.js）：拿掉声明文件，模板里的标签用法补成 import 交给 knip
-  const globals = findGlobalComponents({ files: contents, sourceSet: new Set(sources), aliases: config.aliases })
-  for (const d of globals.declarations) rmSync(join(snap.dir, d), { force: true })
-  const tagUses = findTagUses({ files: [...contents, ...testContents.filter((t) => !sources.includes(t.path))], components: globals.components })
+  const sourceSet = new Set(sources)
+  const allCode = [...contents, ...testContents.filter((t) => !sourceSet.has(t.path))]
+  const globals = findGlobalComponents({ files: contents, sourceSet, aliases: config.aliases })
+  // 自动导入（见 auto-imports.js）：同样拿掉登记了本地函数的声明文件，按名字找用法
+  const autos = findAutoImports({ files: contents, sourceSet, extensions: config.extensions, aliases: config.aliases })
+  for (const d of [...globals.declarations, ...autos.declarations]) rmSync(join(snap.dir, d), { force: true })
+  const tagUses = mergeRefs(
+    findTagUses({ files: allCode, components: globals.components }),
+    findNameUses({ files: allCode, names: autos.names, skip: new Set([...globals.declarations, ...autos.declarations]) })
+  )
   injectImports(snap.dir, tagUses)
+  const deps = new Set(['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((k) => Object.keys(pkg[k] ?? {})))
 
   // 参与分析的文件：源码目录下、配置的扩展名
   const projectGlobs = config.sourceRoots.flatMap((dir) => config.extensions.map((ext) => `${dir}/**/*${ext}`))
@@ -135,7 +146,6 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   }
   const stillUnused = new Set(withTests?.unusedFiles ?? [])
 
-  const sourceSet = new Set(sources)
   const skipped = { test: 0, ignored: 0, outside: [] }
   const files = []
   for (const file of main.unusedFiles) {
@@ -162,21 +172,57 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   const reviewedLoads = allLoads
     .filter((l) => isReviewed(l, config.reviewedDynamicLoads))
     .map((l) => ({ ...l, reason: isReviewed(l, config.reviewedDynamicLoads).reason }))
+  // 盲区：换算不了的 glob、名字是变量的动态组件，也当成范围确定不了的动态加载（同样可以人工确认后放过）
+  const extraLoads = [
+    ...unresolvedGlobs.map((g) => ({
+      from: g.from,
+      line: g.line,
+      kind: 'import.meta.glob',
+      expr: g.expr,
+      scope: wideScope('', g.regex),
+      note: g.regex
+        ? `glob 换算不了（别名没配置？），按模式 ${g.regex} 在全仓库里圈。在 profile 的 aliases 里补上别名，或人工确认后写进配置 reviewedDynamicLoads`
+        : 'glob 的参数不是字符串，整个仓库都可能。人工确认后可以写进配置 reviewedDynamicLoads'
+    }))
+  ]
+  // 名字是变量的 :is / resolveComponent：项目有全局注册的组件时，可能用到的是任何一个全局组件；
+  // 装了自动注册的插件却没有声明文件时，所有 .vue 都可能
+  const autoRegister = ['unplugin-vue-components', 'vite-plugin-components'].some((d) => deps.has(d))
+  const componentScope = new Set([...globals.components.values(), ...(autoRegister && globals.declarations.length === 0 ? sources.filter((f) => f.endsWith('.vue')) : [])])
+  if (componentScope.size > 0) {
+    for (const u of findComponentVarUses(contents)) {
+      extraLoads.push({
+        ...u,
+        kind: 'component',
+        scope: { ...wideScope('', null), files: componentScope },
+        note: '组件名是变量，看不出是哪个全局组件，所有全局组件都可能。人工确认它不会用到这个组件后，可以写进配置 reviewedDynamicLoads'
+      })
+    }
+  }
+  for (const l of extraLoads) {
+    const r = isReviewed(l, config.reviewedDynamicLoads)
+    if (r) reviewedLoads.push({ ...l, reason: r.reason })
+    else loads.push(l)
+    allLoads.push(l)
+  }
   for (const r of config.reviewedDynamicLoads) {
     if (!allLoads.some((l) => l.from === r.from && l.expr === r.expr)) {
       warnings.push({ from: r.from, line: 0, detail: `配置 reviewedDynamicLoads 里的 ${r.expr} 在这个提交里找不到（代码改了？），这条确认没有用上` })
     }
   }
-  for (const l of loads.filter((x) => x.scope.wide && !isReviewed(x, config.reviewedDynamicLoads))) {
+  for (const l of loads.filter((x) => x.scope.wide && x.kind !== 'import.meta.glob' && !isReviewed(x, config.reviewedDynamicLoads))) {
     warnings.push({
       from: l.from,
       line: l.line,
-      detail: `动态加载确定不了目录：${l.expr}，范围内的候选都判为 unknown；人工确认它不加载本地源码后，可以写进配置 reviewedDynamicLoads`
+      detail:
+        l.kind === 'component'
+          ? `动态组件的名字是变量：${l.expr}，候选里的全局组件都判为 unknown；人工确认后可以写进配置 reviewedDynamicLoads`
+          : `动态加载确定不了目录：${l.expr}，范围内的候选都判为 unknown；人工确认它不加载本地源码后，可以写进配置 reviewedDynamicLoads`
     })
   }
   const targets = files.map((f) => f.file)
   const otherContents = others.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-  const externalRefs = findExternalRefs({ files: otherContents, targets })
+  const externalRefs = findExternalRefs({ files: otherContents, targets, aliases: config.aliases })
   // 注释只看在用的文件：候选（没人用的）、测试文件里的注释不算
   const candidateSet = new Set(targets)
   const commentRefs = findCommentRefs({
@@ -194,7 +240,18 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
   )
   // 没合并的分支：分支自己改过的文件里 import 了候选，或者改了候选本身
   const branchScan = findBranchRefs({ root, rev: snap.commit, targets, extensions: config.extensions, aliases: config.aliases, branches: config.branches })
-  const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, branchRefs: branchScan.refs, importers })
+  // 盲区兜底（见 rules/blind-spots.js）：只看在用的文件（不是候选、不是测试）
+  const live = contents.filter((c) => !candidateSet.has(c.path) && !testFiles.has(c.path))
+  const declaredComponents = new Set(globals.components.values())
+  const tags = findSameNameTags({ files: live, targets: targets.filter((t) => t.endsWith('.vue') && !declaredComponents.has(t)) })
+  const autoImportPlugin = ['unplugin-auto-import'].some((d) => deps.has(d))
+  const bareExports =
+    autoImportPlugin && !autos.found
+      ? findBareExportUses({ files: live, targets: contents.filter((c) => candidateSet.has(c.path) && !c.path.endsWith('.vue')) })
+      : new Map()
+  const externalMaybe = findExternalMaybe({ files: otherContents, targets, found: externalRefs })
+  const blindSpots = { sameNameTags: tags.used, commentedTags: tags.commented, bareExports, externalMaybe }
+  const judged = judge({ files, loads, reviewedLoads, externalRefs, commentRefs, testRefs, branchRefs: branchScan.refs, blindSpots, importers })
   const byStatus = {}
   for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
 
@@ -216,7 +273,15 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
       },
       dynamicLoads: allLoads.length,
       reviewedLoads: reviewedLoads.length,
-      branches: { checked: branchScan.checked, skipped: branchScan.skipped, byBranch: refsByBranch(branchScan.refs) },
+      branches: { checked: branchScan.checked, skipped: branchScan.skipped, byBranch: refsByBranch(branchScan.refs), remotes: branchScan.remotes },
+      blindSpots: {
+        sameNameTags: tags.used.size,
+        commentedTags: tags.commented.size,
+        bareExports: bareExports.size,
+        externalMaybe: externalMaybe.size,
+        autoImportWithoutDeclaration: autoImportPlugin && !autos.found,
+        autoImports: autos.names.size
+      },
       addedDeps,
       globalComponents: { declarations: globals.declarations, components: globals.components.size, used: tagUses.size },
       outside: skipped.outside

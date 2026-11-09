@@ -13,7 +13,8 @@
  *   /        相对仓库根目录
  *   其他     当成从仓库根目录写起（构建配置里常见的 'src/a.js'）
  * 解析出的路径等于候选文件、等于去掉扩展名的候选文件，或是 index 文件所在的目录，就算引用
- * 注释里不带引号的文字（如「旧的 src/a.js 已不用」）不算：那是说明，不是代码
+ * 注释里不带引号的文字（如「旧的 src/a.js 已不用」）不算：那是说明，不是代码。
+ * 例外：yml、sh 的 # 注释里写路径一般不带引号（# entry: src/old.js），带源码扩展名的路径也认
  *
  * 已知限制：.vue 模板里注释掉的组件标签（<!-- <OldComp /> -->）不认：标签名对不上文件路径，
  * 一般同一个文件里注释掉的 import 会被认出来
@@ -24,6 +25,9 @@ import { buildLookup, resolveSpec } from './path-refs.js'
 
 const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx']
 const QUOTED = /(['"`])([^'"`\n]+?)\1/g
+/** # 注释里不带引号的路径：带源码扩展名 */
+const BARE_PATH = /()((?:\.{0,2}\/)?[\w@$-][\w@$.-]*(?:\/[\w@$.-]+)*\.(?:js|mjs|cjs|jsx|ts|mts|cts|tsx|vue|svelte|astro))(?![\w])/g
+const HASH_COMMENT = ['.yml', '.yaml', '.sh']
 const SNIPPET_MAX = 80
 
 /**
@@ -46,7 +50,9 @@ export function findCommentRefs({ files, targets, aliases = {} }) {
   for (const { path, content } of files) {
     const lines = content.split('\n')
     for (const c of commentsOf(path, content)) {
-      for (const m of c.text.matchAll(QUOTED)) {
+      const specs = [...c.text.matchAll(QUOTED)]
+      if (HASH_COMMENT.some((e) => path.endsWith(e))) specs.push(...c.text.matchAll(BARE_PATH))
+      for (const m of specs) {
         const resolved = resolveSpec(m[2], path, aliases)
         if (resolved === null) continue
         for (const target of lookup.get(resolved) ?? []) {
@@ -69,7 +75,18 @@ function commentsOf(path, content) {
   if (SFC_EXTENSIONS.some((e) => path.endsWith(e))) return findComments(scriptOnly(content))
   if (JS_LIKE.some((e) => path.endsWith(e))) return findComments(content)
   if (path.endsWith('.html')) return htmlComments(content)
-  return [] // json、yml 等：json 没有注释，yml 的 # 注释暂不处理
+  if (HASH_COMMENT.some((e) => path.endsWith(e))) return hashComments(content)
+  return [] // json 没有注释
+}
+
+/** yml、sh 的 # 注释：行首或空白后面的 # 到行尾（# 号在引号里的不细分，只会多认） */
+export function hashComments(content) {
+  const out = []
+  content.split('\n').forEach((line, i) => {
+    const m = line.match(/(?:^|\s)#(.*)$/)
+    if (m && !line.trimStart().startsWith('#!')) out.push({ line: i + 1, text: m[1] })
+  })
+  return out
 }
 
 /** html 的 <!-- --> 注释，记下开始的行号 */

@@ -108,6 +108,10 @@ function printSummary(s) {
   if (s.branches.checked.length > 0 || s.branches.skipped.length > 0) {
     console.error(`  没合并的分支：查了 ${s.branches.checked.length} 个` + (s.branches.skipped.length > 0 ? `，按配置跳过 ${s.branches.skipped.length} 个` : '') + '（只读本地已有的分支，不 fetch）')
   }
+  const rm = s.branches.remotes
+  if (rm && rm.count > 0 && (rm.lastFetchDays === null || rm.lastFetchDays > 7)) {
+    console.error(`  注意：远程分支以上次 fetch 为准（scan 不 fetch），上次 fetch ${rm.lastFetchDays === null ? '找不到记录' : `在 ${rm.lastFetchDays} 天前`}，别人新推的分支看不到。先 git fetch 再 scan`)
+  }
   if (s.branches.byBranch.length > 0) {
     console.error('  这些分支还在用部分候选，相关文件判为 pending：')
     for (const b of s.branches.byBranch) console.error(`    - ${b.branch}（最后提交 ${b.date}）：${b.files.length} 个文件`)
@@ -117,6 +121,16 @@ function printSummary(s) {
     const g = s.globalComponents
     console.error(`  全局注册的组件：${g.declarations.join('、')} 里登记了 ${g.components} 个，其中 ${g.used} 个在模板里用到（按标签认，补成引用交给 knip）`)
   }
+  const b = s.blindSpots
+  const hits = [
+    b.sameNameTags && `同名标签 ${b.sameNameTags} 个`,
+    b.commentedTags && `注释里的同名标签 ${b.commentedTags} 个`,
+    b.bareExports && `疑似自动导入 ${b.bareExports} 个`,
+    b.externalMaybe && `疑似拼出来的路径 ${b.externalMaybe} 个`
+  ].filter(Boolean)
+  if (hits.length > 0) console.error(`  盲区兜底（看不准的不判死，证据里写明原因）：${hits.join('，')}`)
+  if (b.autoImportWithoutDeclaration) console.error('  注意：装了 unplugin-auto-import 却没有找到声明文件（dts 关了？），自动导入的本地函数只能按名字兜底')
+  if (b.autoImports > 0) console.error(`  自动导入：声明文件里登记了 ${b.autoImports} 个本地函数，按名字认出用法，补成引用交给 knip`)
   if (s.addedDeps.length > 0) {
     console.error(`  package.json 没有声明 ${s.addedDeps.join('、')}：只在临时目录里补上，否则 knip 会跳过对应的单文件组件`)
   }

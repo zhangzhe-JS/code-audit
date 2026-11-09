@@ -72,7 +72,7 @@ test('注释里的 glob 不算', () => {
 
 test('require.context 不归这里管（由 dynamic-imports 处理）', () => {
   const r = find('src/a.js', "const ctx = require.context('./svg', false, /\\.svg$/)")
-  assert.deepEqual(r, { globs: [], warnings: [] })
+  assert.deepEqual(r, { globs: [], warnings: [], unresolved: [] })
 })
 
 test('.vue 文件只看 <script>：模板里的撇号不会让后面的代码被当成字符串', () => {
@@ -103,5 +103,5 @@ test('scriptOnly：.astro 开头 --- 之间的代码也保留', () => {
 })
 
 test('没有 glob 的文件直接跳过', () => {
-  assert.deepEqual(find('src/a.js', "import x from './x'"), { globs: [], warnings: [] })
+  assert.deepEqual(find('src/a.js', "import x from './x'"), { globs: [], warnings: [], unresolved: [] })
 })

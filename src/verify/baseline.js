@@ -3,7 +3,7 @@
  *
  * 删文件以后的结果要和基线比：基线里本来就有的失败、警告不算删文件引起的
  */
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runCommand } from './run-command.js'
 
@@ -14,7 +14,7 @@ export const STEPS = Object.freeze(['build', 'test'])
  * @param {object} opts
  * @param {string} opts.cwd  工作目录
  * @param {Readonly<import('../core/config.js').VerifyConfig>} opts.verify
- * @param {string} [opts.logDir] 完整输出写到这个目录（每步一个 .log）
+ * @param {string} [opts.logDir] 完整输出写到这个目录（每步一个 .log，不截断）
  * @param {(msg: string) => void} [opts.log]
  * @param {typeof runCommand} [opts.run] 测试时可以替换
  * @returns {Promise<Record<string, import('./run-command.js').CommandResult>>} 只含配置了的步骤
@@ -25,12 +25,12 @@ export async function runSteps({ cwd, verify, logDir, log = () => {}, run = runC
     const command = verify[step]
     if (!command) continue
     log(`运行 ${step}：${command}`)
-    const r = await run(command, { cwd, timeoutSeconds: verify.timeoutSeconds })
+    const logFile = logDir ? join(logDir, `${step}.log`) : undefined
+    if (logDir) mkdirSync(logDir, { recursive: true })
+    const r = await run(command, { cwd, timeoutSeconds: verify.timeoutSeconds, logFile })
     results[step] = r
-    if (logDir) {
-      mkdirSync(logDir, { recursive: true })
-      writeFileSync(join(logDir, `${step}.log`), r.output)
-    }
+    // 替换掉的 run（测试用）可能不写日志：至少把保留下来的输出写进去
+    if (logFile && !existsSync(logFile)) writeFileSync(logFile, r.output)
     log(`  ${describe(r)}`)
   }
   return results
