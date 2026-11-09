@@ -78,3 +78,22 @@ test('judge：knip 不分析的文件里写着路径的判为 external；同时�
   assert.deepEqual(a.evidence.map((e) => e.rule), ['knip-unreachable', 'dynamic-load', 'external-ref'])
   assert.deepEqual(a.refs.map((r) => r.via), ['dynamic', 'config'])
 })
+
+test('judge：在用的代码里有注释掉的引用判为 dormant；同时在构建配置里写着时 external 优先', () => {
+  const commentRefs = new Map([
+    ['src/a.js', [{ from: 'src/main.js', line: 84, text: "// import a from '@/a.js'" }]],
+    ['src/b.js', [{ from: 'src/main.js', line: 85, text: "// import b from '@/b.js'" }]]
+  ])
+  const externalRefs = new Map([['src/b.js', [{ from: 'vite.config.js', line: 1, text: "'src/b.js'" }]]])
+  const [a, b] = judge({
+    files: [{ file: 'src/a.js', evidence: [knipEv] }, { file: 'src/b.js', evidence: [knipEv] }],
+    loads: [],
+    externalRefs,
+    commentRefs
+  })
+  assert.equal(a.status, 'dormant')
+  assert.match(a.evidence[1].detail, /src\/main\.js:84 有注释掉的引用：\/\/ import a from '@\/a\.js'/)
+  assert.deepEqual(a.refs, [{ from: 'src/main.js', line: 84, via: 'comment' }])
+  assert.equal(b.status, 'external')
+  assert.deepEqual(b.evidence.map((e) => e.rule), ['knip-unreachable', 'external-ref', 'commented-ref'])
+})

@@ -41,15 +41,16 @@ test('index 文件也认目录写法（带不带结尾的 /）', () => {
   assert.deepEqual(find({ 'p.json': '"src/legacy/other.js"' }, ['src/legacy/index.js']), {})
 })
 
-test('JS 类文件里注释掉的不算；html、json 原样搜', () => {
+test('JS 类文件、html 里注释掉的不算（交给注释停用规则）', () => {
   const r = find(
     {
       'vite.config.js': "// path.resolve(__dirname, 'src/old.js')\n/* 'src/old.js' */\n",
-      'index.html': '<!-- <script src="/src/old.js"></script> -->'
+      'index.html': '<!-- <script src="/src/old.js"></script> -->\n<script src="/src/old.js"></script>',
+      'a.json': '{ "x": "src/old.js" }'
     },
     ['src/old.js']
   )
-  assert.deepEqual(lines(r, 'src/old.js'), ['index.html:1'])
+  assert.deepEqual(lines(r, 'src/old.js'), ['a.json:1', 'index.html:2'])
 })
 
 test('同一个文件里多处、多个候选', () => {

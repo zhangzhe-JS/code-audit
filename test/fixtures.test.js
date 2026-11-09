@@ -14,7 +14,7 @@ import { createRepo } from './helpers/repo.js'
  * 已经做好规则的状态：这些状态要和标准答案完全一致。
  * 其余状态的规则还没做，只检查文件被列为候选、暂时标着「未判定」。每做完一条规则就加进来
  */
-const IMPLEMENTED = new Set(['unknown', 'external'])
+const IMPLEMENTED = new Set(['unknown', 'external', 'dormant'])
 
 let hasKnip = true
 try {
@@ -60,7 +60,7 @@ for (const name of names) {
     cpSync(join(dir, name, 'project'), repo.root, { recursive: true })
     repo.commit('fixture')
 
-    const { candidates } = scan({ root: repo.root, project: name, config: resolveConfig({ entries: expected.entries }) })
+    const { candidates } = scan({ root: repo.root, project: name, config: resolveConfig({ entries: expected.entries, ...expected.config }) })
     const got = new Map(candidates.files.map((f) => [f.file, f]))
 
     // 导出维度还没做，只看文件

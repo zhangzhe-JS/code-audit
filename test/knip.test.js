@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   COMPILER_PLUGINS,
+  addCompilerDeps,
   assertOnlyCompilerPlugins,
   buildKnipConfig,
   findKnip,
@@ -129,4 +130,14 @@ test('findKnip：--knip 指定的目录正确时返回版本和命令文件', ()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('addCompilerDeps：源码里有 .vue/.svelte 而 package.json 没声明时补上；已声明的、没有这类文件的不补', () => {
+  const pkg = { name: 'x', dependencies: { svelte: '^4' }, devDependencies: { eslint: '^8' } }
+  const added = addCompilerDeps(pkg, ['src/a.vue', 'src/b.svelte', 'src/c.js'])
+  assert.deepEqual(added, ['vue'])
+  assert.deepEqual(pkg.devDependencies, { eslint: '^8', vue: '*' })
+  assert.equal(pkg.name, 'x')
+  assert.deepEqual(addCompilerDeps({ peerDependencies: { vue: '3' } }, ['a.vue']), [])
+  assert.deepEqual(addCompilerDeps({}, ['a.js']), [])
 })

@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：304 个，全部通过（`npm test`）
+- 测试：323 个，全部通过（`npm test`）
 
 ---
 
@@ -15,7 +15,7 @@
 | M1 | history 模块：引入、引用时间线、失去引用 | ✅ 完成（d4a518a） |
 | M2 | report：从 JSON 生成 Markdown 报告、文件头注释 | ✅ 完成（06c07de） |
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
-| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（306951b）、② external（待提交） |
+| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（306951b）、② external（8516d78）、③ dormant（待提交） |
 | M5 | verify：临时 worktree 实删，和构建 / 测试基线对比 | ⏳ 未开始 |
 | M6 | 接入第二个项目（Vue3 + TS） | ⏳ 未开始 |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
@@ -179,8 +179,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | 顺序 | 状态 | 做法 | 状态 |
 |---|---|---|---|
 | ① | `unknown` | 路径里有变量的动态加载，圈出可能加载的文件 | ✅ 306951b |
-| ② | `external` | 在 knip 不分析的文件里搜候选的路径 | ✅ 完成（待提交） |
-| ③ | `dormant` | 在注释里搜引用 | ⏳ |
+| ② | `external` | 在 knip 不分析的文件里搜候选的路径 | ✅ 8516d78 |
+| ③ | `dormant` | 在用的代码、配置文件的注释里搜引用 | ✅ 完成（待提交） |
 | ④ | `test-only` | 直接用 scan 的 knip 证据 | ⏳ |
 | ⑤ | `dead-only-ref` | 候选之间的引用关系 | ⏳ |
 | ⑥ | `dead` | 以上都不是 | ⏳ |
@@ -202,7 +202,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   - `require.context` 按目录、是否含子目录、正则算；正则写错时不限文件
   - 路径开头就是变量、包名、三元表达式：范围确定不了，记警告
 - [x] `src/rules/dynamic-load.js`：落在范围里的候选判为 `unknown`，每处加载一条证据、一条引用（`via: dynamic`）；加载方本身也是候选时在证据里注明
-- [x] 试验发现：knip 自己能处理模板字符串里的变量（`` import(`./views/${n}.vue`) `` 当成 glob，含子目录），这些文件算在用，不会成为候选；`+` 拼接和 `require.context` 它不处理
+- [x] ~~试验发现：knip 自己能处理模板字符串里的变量~~：**这个结论是错的**（③ 时发现）。当时 fixture 没有 package.json，knip 悄悄跳过了所有 .vue 文件，看起来像「算在用」。补上依赖声明后，模板字符串加载的 .vue 照样是候选，由本规则判为 unknown
 - [x] finicr-web：所有 `import()` 都是固定路径，没有动态加载，结果不变（58 个候选）
 - [x] 反向检查：逐个撤掉关键逻辑（保留状态和引用、排除自己、非递归、省略扩展名、优先级、参数里的正则），每处都有测试失败
 
@@ -218,6 +218,28 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] `src/rules/external.js`：命中的判为 `external`，每处一条证据、一条引用（`via: config`）
 - [x] finicr-web：正好找出 M3 时人工确认的 2 个——`src/shims/fpv-excel-engine-stub.js`（vite-config/resolve.js）、`src/i18n/menu.js`（scripts/generateMenuI18n.js），没有多报
 - [x] 反向检查：逐个撤掉 9 处关键逻辑（排除测试文件、去注释、左右边界、index 目录写法、带扩展名、源码目录里的非源码文件、规则注册、导出要搜的文件），每处都有测试失败
+
+### ③ dormant：注释停用
+
+- [x] `strip-comments.js` 新增 `findComments`：和去注释用同一套判断，取出注释和开始的行号
+- [x] `src/collect/comment-refs.js`：注释里引号括起来的路径，按写注释的文件解析（相对、别名、`/` 开头、从仓库根目录写起），
+  等于候选、去掉扩展名的候选或 index 文件的目录就算引用
+  - 搜哪些注释：在用的源码（不是候选、不是测试文件）里的 JS 注释，`.vue` 只看 `<script>`；配置文件、脚本的 JS 注释；html 的 `<!-- -->`
+  - 候选文件里的注释不算：写注释的文件本身没人用，恢复那行也用不上
+  - 不带引号的说明文字不算
+- [x] `src/rules/dormant.js`：命中的判为 `dormant`，引用 `via: comment`
+- [x] external 不再把 html 里注释掉的路径算成图外使用，改由 dormant 判定
+- [x] finicr-web：正好找出 M3 时人工确认的 2 个——`src/utils/browser-check.js`（main.js:84）、`src/components/ResolutionTip/index.vue`（App.vue:35）
+- [x] fixture 支持在 expected.json 里写 `config`（如别名）
+- [x] 反向检查：逐个撤掉 11 处关键逻辑，每处都有测试失败
+
+### ③ 时发现并修复：没声明 vue 依赖时 knip 跳过 .vue 文件
+
+- knip 只在 package.json 声明了 vue（svelte、astro 同理）时才解析 .vue，否则悄悄跳过，插件列表里照样显示 Vue，核对插件看不出来
+- 后果：.vue 文件不会列为候选；.vue 里的 import 也不跟进，**只被组件用到的 js 会被误报为没人用**（会导致误删的方向）
+- 会遇到的情况：monorepo 里 vue 写在子包、没有 package.json
+- 修复：scan 在临时目录的 package.json 里补上缺的依赖声明（源码里有 .vue 才补），不碰目标仓库；输出里会提示补了什么
+- finicr-web 声明了 vue，不受影响；fixture 之前没有 package.json，所以 ① 的「knip 能处理模板字符串」是误判
 
 ---
 
@@ -241,7 +263,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 | 字符串里出现 `import(`、`require(` 字样时也会当成调用 | 多圈文件、多发警告 | 低。不会误删 |
 | external 只认从仓库根目录写起的路径：配置里相对自身目录的写法（如 `build/` 下写 `'./x'`）、拼接出来的路径找不到 | 漏判 external，可能落到 dead | 中。实删前还有 verify（构建会报错） |
 | external：省略扩展名的路径同时也是目录名时（`'src/i18n/menu'` 指目录），也算引用了 `src/i18n/menu.js` | 多一条证据 | 低。模块解析本来也是文件优先 |
-| external：html 里 `<!-- -->` 注释掉的路径仍算 | 多判 external | 低。不会误删 |
+| dormant：`.vue` 模板里注释掉的组件标签（`<!-- <Tip /> -->`）不认，只认注释掉的 import | 只注释了标签、没注释 import 时漏判 | 低。组件仍被 import，不会是候选 |
+| dormant：yml 的 `#` 注释不搜 | 可能漏判 | 低 |
 
 已确认不是问题：
 

@@ -1,0 +1,15 @@
+{
+  "description": "注释停用：在用的代码里注释掉的 import（别名、相对、省略扩展名、index 目录、块注释、.vue 的 script）是 dormant；不带引号的说明、没人用的文件里的注释不算",
+  "entries": ["src/main.js"],
+  "config": { "aliases": { "@": "src" } },
+  "items": [
+    { "id": "file:src/App.vue", "status": "live" },
+    { "id": "file:src/components/Tip.vue", "status": "dormant" },
+    { "id": "file:src/dead.js", "status": "dead" },
+    { "id": "file:src/legacy/index.js", "status": "dormant" },
+    { "id": "file:src/utils/check.js", "status": "dormant" },
+    { "id": "file:src/utils/only-in-dead.js", "status": "dead" },
+    { "id": "file:src/utils/prose.js", "status": "dead" },
+    { "id": "file:src/views/Old.vue", "status": "dormant" }
+  ]
+}

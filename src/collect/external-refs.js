@@ -9,7 +9,7 @@
  * 按路径匹配（去掉扩展名，带不带扩展名都算），两侧有边界：
  *   src/a 不匹配 src/a.config.js、src/a/b.js、src/ab.js
  * index 文件也认目录写法：src/a/index.js 匹配 'src/a'
- * JS 类文件先去掉注释（注释掉的引用不算在用）；html、json、yml 等原样搜
+ * JS 类文件、html 先去掉注释（注释掉的引用不算在用，由 comment-refs 判为注释停用）；json、yml 等原样搜
  *
  * 已知限制：只认从仓库根目录写起的路径（前面可以有 ./、/、../ 等）。
  * 相对配置文件所在目录的写法（如 build/ 下写 '../src/a' 能匹配，但写 'a' 不行）、拼接出来的路径找不到
@@ -65,7 +65,11 @@ export function findExternalRefs({ files, targets }) {
   const matchers = targets.map((t) => ({ target: t, forms: formsOf(t) }))
   const result = new Map()
   for (const { path, content } of files) {
-    const code = JS_LIKE.some((e) => path.endsWith(e)) ? stripComments(content) : content
+    const code = JS_LIKE.some((e) => path.endsWith(e))
+      ? stripComments(content)
+      : path.endsWith('.html')
+        ? stripHtmlComments(content)
+        : content
     for (const { target, forms } of matchers) {
       for (const form of forms) {
         if (!code.includes(form.text)) continue
@@ -103,6 +107,11 @@ function formsOf(file) {
 /** 左边不是名字的一部分；右边不再接名字、扩展名或下一级路径 */
 function bounded(body) {
   return new RegExp(`(?<![\\w$@-])${body}(?![\\w.$/-])`, 'g')
+}
+
+/** 去掉 html 的 <!-- -->，换行保留：行号不变 */
+function stripHtmlComments(content) {
+  return content.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ''))
 }
 
 function escape(s) {

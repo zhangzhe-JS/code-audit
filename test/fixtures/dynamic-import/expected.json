@@ -1,5 +1,5 @@
 {
-  "description": "路径里有变量的动态加载：+ 拼接、require.context 范围里的是 unknown，范围外的照常判定。模板字符串里的变量 knip 自己当成 glob 处理（含子目录），算在用",
+  "description": "路径里有变量的动态加载：模板字符串、+ 拼接、require.context 范围里的是 unknown（含子目录），范围外的照常判定",
   "entries": ["src/main.js"],
   "items": [
     { "id": "file:src/dead.js", "status": "dead" },
@@ -7,8 +7,8 @@
     { "id": "file:src/modules/a.js", "status": "unknown" },
     { "id": "file:src/modules/sub/b.js", "status": "dead" },
     { "id": "file:src/router.js", "status": "live" },
-    { "id": "file:src/views/Home.vue", "status": "live" },
-    { "id": "file:src/views/admin/User.vue", "status": "live" },
+    { "id": "file:src/views/Home.vue", "status": "unknown" },
+    { "id": "file:src/views/admin/User.vue", "status": "unknown" },
     { "id": "file:src/views/helper.js", "status": "dead" }
   ]
 }

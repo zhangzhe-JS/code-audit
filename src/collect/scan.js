@@ -8,7 +8,7 @@
  * 3. 只用项目入口跑一次 knip：得到「从入口走不到」的文件
  * 4. 配置了测试入口时，再加上测试入口跑一次：两次一比，就知道哪些「只被测试用到」
  * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的判为 unknown，
- *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external
+ *    构建配置、脚本等 knip 不分析的文件里写着路径的判为 external，在用的代码里有注释掉的引用的判为 dormant
  *
  * 候选清单里写好状态、证据、引用，history 只补历史，不改结论
  */
@@ -16,10 +16,11 @@ import { DEFAULT_CONFIG } from './../core/config.js'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { findGlobImports } from './glob-imports.js'
-import { buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
+import { addCompilerDeps, buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
 import { createSnapshot } from './snapshot.js'
 import { findDynamicLoads } from './dynamic-imports.js'
 import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external-refs.js'
+import { findCommentRefs } from './comment-refs.js'
 import { judge } from '../rules/index.js'
 
 /**
@@ -88,10 +89,21 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
     ...others
   ])
   snap.extract([...extracted].sort())
-  // knip 要求根目录有 package.json；提交里没有时，在临时目录补一个空的（不影响分析，也不碰原仓库）
-  if (!extracted.has('package.json')) {
+  // package.json：knip 要求根目录有；提交里没有时在临时目录补一个空的。
+  // 再补上单文件组件的依赖声明，否则 knip 会悄悄跳过 .vue 等文件（见 addCompilerDeps）。只改临时目录，不碰原仓库
+  const pkgPath = join(snap.dir, 'package.json')
+  let pkg = {}
+  if (extracted.has('package.json')) {
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+    } catch (e) {
+      throw new Error(`package.json 不是合法的 JSON，knip 无法分析：${e.message}`)
+    }
+  }
+  const addedDeps = addCompilerDeps(pkg, sources)
+  if (!extracted.has('package.json') || addedDeps.length > 0) {
     mkdirSync(snap.dir, { recursive: true })
-    writeFileSync(join(snap.dir, 'package.json'), '{}\n')
+    writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`)
   }
 
   // 2. import.meta.glob → 入口
@@ -142,11 +154,17 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
       detail: `动态加载的路径确定不了范围：${l.expr}，被它加载的文件可能被误报为没人用`
     })
   }
-  const externalRefs = findExternalRefs({
-    files: others.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') })),
-    targets: files.map((f) => f.file)
+  const targets = files.map((f) => f.file)
+  const otherContents = others.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+  const externalRefs = findExternalRefs({ files: otherContents, targets })
+  // 注释只看在用的文件：候选（没人用的）、测试文件里的注释不算
+  const candidateSet = new Set(targets)
+  const commentRefs = findCommentRefs({
+    files: [...contents.filter((c) => !candidateSet.has(c.path) && !testFiles.has(c.path)), ...otherContents],
+    targets,
+    aliases: config.aliases
   })
-  const judged = judge({ files, loads, externalRefs })
+  const judged = judge({ files, loads, externalRefs, commentRefs })
   const byStatus = {}
   for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
 
@@ -167,6 +185,7 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
         byStatus
       },
       dynamicLoads: loads.length,
+      addedDeps,
       outside: skipped.outside
     }
   }

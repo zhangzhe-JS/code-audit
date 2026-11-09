@@ -1,4 +1,4 @@
-// 页面：按名字加载，路径里有变量（knip 自己能处理模板字符串，当成 glob）
+// 页面：按名字加载，路径里有变量
 export const page = (name) => import(`./views/${name}.vue`)
 
 // 语言包：用 + 拼接

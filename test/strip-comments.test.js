@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { stripComments } from '../src/collect/strip-comments.js'
+import { findComments, stripComments } from '../src/collect/strip-comments.js'
 
 const P = 'utils/x'
 const hasRef = (code) => stripComments(code).includes(P)
@@ -94,4 +94,27 @@ test('${} 里的对象字面量不会提前结束表达式', () => {
 test('嵌套的模板字符串', () => {
   assert.equal(hasRef('const s = `a ${ `b ${ c } // utils/x` } d`'), true)
   assert.equal(hasRef('const s = `a ${ `b ${ c }` } d` // utils/x'), false)
+})
+
+// ---------- findComments ----------
+
+test('findComments：行注释、块注释（跨行）、文件末尾没有换行的注释，记下开始的行号', () => {
+  const code = "a // one\nb /* two\nthree */ c\nd // last"
+  assert.deepEqual(findComments(code), [
+    { line: 1, text: ' one' },
+    { line: 2, text: ' two\nthree ' },
+    { line: 4, text: ' last' }
+  ])
+})
+
+test('findComments：字符串、模板字符串、正则里像注释的不算', () => {
+  const code = "const a = '// no'\nconst b = `/* no */ ${x /* yes */}`\nconst r = /\\/\\/no/\n"
+  assert.deepEqual(findComments(code), [{ line: 2, text: ' yes ' }])
+})
+
+test('findComments：去注释的结果不受影响', () => {
+  const code = "a // x\n/* y */b"
+  const comments = []
+  assert.equal(stripComments(code, comments), stripComments(code))
+  assert.equal(comments.length, 2)
 })

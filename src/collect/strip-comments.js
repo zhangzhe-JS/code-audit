@@ -25,7 +25,28 @@ const REGEX_AFTER_WORDS = new Set([
   'delete', 'void', 'throw', 'instanceof', 'yield', 'await'
 ])
 
-export function stripComments(code) {
+/**
+ * @typedef {object} Comment
+ * @property {number} line  注释开始的行号
+ * @property {string} text  注释内容，不含 // 、/* * / 本身；块注释里的换行保留
+ */
+
+/**
+ * 只取出注释：和 stripComments 用同一套判断，字符串、正则里像注释的内容不算
+ * @param {string} code
+ * @returns {Comment[]}
+ */
+export function findComments(code) {
+  const comments = []
+  stripComments(code, comments)
+  return comments
+}
+
+/**
+ * @param {string} code
+ * @param {Comment[]} [comments] 传了就把遇到的注释收集进来
+ */
+export function stripComments(code, comments) {
   let out = ''
   let i = 0
   let state = 'code' // code | line | block | ' | " | ` | regex
@@ -34,14 +55,30 @@ export function stripComments(code) {
   // 模板字符串 ${ } 的嵌套层级：每进入一层 ${ 压入一个计数器，记录这层表达式里还没闭合的 {
   const braces = []
 
+  // 收集注释用：当前注释，以及行号（增量计算，不必每次从头数换行）
+  let cur = null
+  let lineAt = 1
+  let linePos = 0
+  const lineOf = (pos) => {
+    for (; linePos < pos; linePos++) if (code[linePos] === '\n') lineAt++
+    return lineAt
+  }
+  const begin = (pos) => {
+    if (comments) cur = { line: lineOf(pos), text: '' }
+  }
+  const end = () => {
+    if (comments && cur) comments.push(cur)
+    cur = null
+  }
+
   while (i < code.length) {
     const c = code[i]
     const n = code[i + 1]
 
     // 在代码里：看是不是注释、字符串、正则的开头
     if (state === 'code') {
-      if (c === '/' && n === '/') { state = 'line'; i += 2; continue }
-      if (c === '/' && n === '*') { state = 'block'; i += 2; continue }
+      if (c === '/' && n === '/') { begin(i); state = 'line'; i += 2; continue }
+      if (c === '/' && n === '*') { begin(i); state = 'block'; i += 2; continue }
       if (c === '/' && regexAllowed(out)) {
         state = 'regex'
         inClass = false
@@ -68,6 +105,9 @@ export function stripComments(code) {
       if (c === '\n') {
         state = 'code'
         out += c
+        end()
+      } else if (cur) {
+        cur.text += c
       }
       i++
       continue
@@ -75,8 +115,9 @@ export function stripComments(code) {
 
     // 在块注释里：一直跳过，直到 */；换行保留
     if (state === 'block') {
-      if (c === '*' && n === '/') { state = 'code'; i += 2; continue }
+      if (c === '*' && n === '/') { state = 'code'; end(); i += 2; continue }
       if (c === '\n') out += c
+      if (cur) cur.text += c
       i++
       continue
     }
@@ -123,6 +164,7 @@ export function stripComments(code) {
     i++
   }
 
+  end() // 文件以注释结尾、没有换行或 */ 的情况
   return out
 }
 

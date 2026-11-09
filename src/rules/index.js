@@ -10,16 +10,17 @@
 import { STATUSES } from '../core/schema.js'
 import { dynamicLoadRule } from './dynamic-load.js'
 import { externalRule } from './external.js'
+import { dormantRule } from './dormant.js'
 
 /** 按优先级从高到低排列；顺序不影响结果（结果按 STATUSES 取），只影响证据的先后 */
-const RULES = [dynamicLoadRule, externalRule]
+const RULES = [dynamicLoadRule, externalRule, dormantRule]
 
 /** 一条规则都没命中时的结论。规则做完以后改成 dead */
 export const NOT_JUDGED = Object.freeze({
   status: 'unknown',
   evidence: Object.freeze({
     rule: 'rules-incomplete',
-    detail: '规则层还没做完（注释停用、只被死代码引用等尚未判定），暂不下结论'
+    detail: '规则层还没做完（只被死代码引用等尚未判定），暂不下结论'
   })
 })
 
@@ -27,6 +28,7 @@ export const NOT_JUDGED = Object.freeze({
  * @typedef {object} RuleContext
  * @property {import('../collect/dynamic-imports.js').DynamicLoad[]} loads  有范围的动态加载
  * @property {Map<string, import('../collect/external-refs.js').ExternalRef[]>} externalRefs  knip 不分析的文件里写着候选路径的地方
+ * @property {Map<string, import('../collect/comment-refs.js').CommentRef[]>} commentRefs  在用的文件里注释掉的引用
  * @property {Set<string>} candidates  所有候选文件
  */
 
@@ -42,11 +44,12 @@ export const NOT_JUDGED = Object.freeze({
  * @param {{file: string, evidence: object[]}[]} opts.files  scan 得出的候选，evidence 是 knip 的结论
  * @param {RuleContext['loads']} opts.loads
  * @param {RuleContext['externalRefs']} [opts.externalRefs]
+ * @param {RuleContext['commentRefs']} [opts.commentRefs]
  * @param {((file: string, ctx: RuleContext) => RuleHit | null)[]} [opts.rules] 测试时可以替换
  * @returns {{file: string, status: string, evidence: object[], refs: object[]}[]}
  */
-export function judge({ files, loads, externalRefs = new Map(), rules = RULES }) {
-  const ctx = { loads, externalRefs, candidates: new Set(files.map((f) => f.file)) }
+export function judge({ files, loads, externalRefs = new Map(), commentRefs = new Map(), rules = RULES }) {
+  const ctx = { loads, externalRefs, commentRefs, candidates: new Set(files.map((f) => f.file)) }
   return files.map(({ file, evidence }) => {
     const hits = rules.map((rule) => rule(file, ctx)).filter(Boolean)
     if (hits.length === 0) {

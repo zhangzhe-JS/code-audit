@@ -24,6 +24,35 @@ import { dirname, join, resolve } from 'node:path'
  */
 export const COMPILER_PLUGINS = Object.freeze({ vue: 'Vue', svelte: 'Svelte', astro: 'Astro' })
 
+/** 单文件组件扩展名 → 依赖名：package.json 里没有这个依赖时，knip 不解析这类文件 */
+export const COMPILER_DEPS = Object.freeze({ '.vue': 'vue', '.svelte': 'svelte', '.astro': 'astro' })
+
+/**
+ * 补上单文件组件的依赖声明，返回补了哪些
+ *
+ * knip 只在 package.json 声明了 vue（svelte、astro 同理）时才解析 .vue 文件，否则悄悄跳过：
+ * .vue 文件不会列为候选，.vue 里的 import 也不跟进，只被组件用到的 js 会被误报为没人用。
+ * 插件列表里照样显示 Vue，核对插件看不出来。monorepo 里依赖写在子包、或者没有 package.json 时都会遇到。
+ *
+ * 只改 scan 导出的临时目录里的 package.json，不碰目标仓库。scan 只问 knip「哪些文件没人用」，
+ * 多一个依赖声明不影响结果
+ * @param {object} pkg     package.json 的内容（会被修改）
+ * @param {string[]} files 源码文件
+ * @returns {string[]} 补上的依赖名
+ */
+export function addCompilerDeps(pkg, files) {
+  const declared = new Set(
+    ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].flatMap((k) => Object.keys(pkg[k] ?? {}))
+  )
+  const added = []
+  for (const [ext, dep] of Object.entries(COMPILER_DEPS)) {
+    if (declared.has(dep) || !files.some((f) => f.endsWith(ext))) continue
+    pkg.devDependencies = { ...pkg.devDependencies, [dep]: '*' }
+    added.push(dep)
+  }
+  return added
+}
+
 /** 没找到 knip 时的提示 */
 const INSTALL_HINT =
   'scan 需要 knip。安装 code-audit 时会自动装上（可选依赖）；如果被跳过了，在 code-audit 目录运行 npm install，' +

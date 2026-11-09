@@ -287,6 +287,64 @@ test('scan：构建配置里写着路径的判为 external；测试文件里写�
   assert.deepEqual(helper.refs, [])
 })
 
+test('scan：在用的代码里注释掉的引用判为 dormant；候选、测试文件里的注释不算', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('src/main.js', "import './used.js'\n// import '@/dead.js'\n")
+  repo.write('src/dead.js', "// import './helper.js'\n") // 候选里的注释
+  repo.write('src/tests/a.test.js', "// import '../mock/data.js'\n") // 测试文件里的注释
+  repo.commit('注释')
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/helper.js', 'src/mock/data.js'] })
+  const config = resolveConfig({ entries: ['src/main.js'], aliases: { '@': 'src' }, testEntries: ['src/tests/**'] })
+  const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
+
+  const byFile = Object.fromEntries(r.candidates.files.map((f) => [f.file, f]))
+  assert.equal(byFile['src/dead.js'].status, 'dormant')
+  assert.deepEqual(byFile['src/dead.js'].refs, [{ from: 'src/main.js', line: 2, via: 'comment' }])
+  assert.deepEqual(byFile['src/helper.js'].refs, [])
+  assert.deepEqual(byFile['src/mock/data.js'].refs, [])
+})
+
+test('scan：只在临时目录的 package.json 里补上单文件组件的依赖，原有内容保留', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('package.json', '{"name":"demo","main":"src/main.js"}\n')
+  repo.write('src/App.vue', '<template><div/></template>\n')
+  repo.commit('vue')
+  let pkg
+  const run = ({ root }) => {
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+    return { unusedFiles: [], enabledPlugins: [] }
+  }
+  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run })
+  assert.deepEqual(pkg, { name: 'demo', main: 'src/main.js', devDependencies: { vue: '*' } })
+  assert.deepEqual(r.summary.addedDeps, ['vue'])
+  assert.equal(readFileSync(join(repo.root, 'package.json'), 'utf8'), '{"name":"demo","main":"src/main.js"}\n')
+})
+
+test('scan：package.json 不是合法的 JSON 时报错', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('package.json', '{ oops')
+  repo.commit('bad')
+  assert.throws(
+    () => scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run: fakeRun({ mainOnly: [] }).run }),
+    /package\.json 不是合法的 JSON/
+  )
+})
+
 test('scan：生成的候选清单能通过 history 的校验', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()
@@ -373,6 +431,19 @@ test('scan + knip：本地删掉 import 但没提交时，按提交里的代码�
 
   const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }) })
   assert.deepEqual(r.candidates.files.map((f) => f.file), ['src/dead.js'])
+})
+
+test('scan + knip：package.json 没声明 vue 时，.vue 照样解析：只被组件用到的 js 不误报，没人用的组件列为候选', needsKnip, (t) => {
+  const repo = createRepo()
+  t.after(() => repo.cleanup())
+  repo.write('src/main.js', "import App from './App.vue'\nexport default App\n")
+  repo.write('src/App.vue', "<template><div/></template>\n<script>\nimport { fmt } from './fmt.js'\nexport default { methods: { fmt } }\n</script>\n")
+  repo.write('src/fmt.js', 'export const fmt = (x) => x\n')
+  repo.write('src/Unused.vue', '<template><div/></template>\n')
+  repo.commit('init')
+
+  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }) })
+  assert.deepEqual(r.candidates.files.map((f) => f.file), ['src/Unused.vue'])
 })
 
 test('scan 命令：没有 --profile 时报错', () => {
