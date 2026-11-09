@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { findGlobImports, resolvePattern, scriptOnly } from '../src/collect/glob-imports.js'
+import { findGlobImports, resolvePattern } from '../src/collect/glob-imports.js'
+import { scriptOnly } from '../src/collect/source-text.js'
 
 const find = (path, content, aliases) => findGlobImports({ files: [{ path, content }], aliases })
 
@@ -69,10 +70,9 @@ test('注释里的 glob 不算', () => {
   assert.deepEqual(r.warnings, [])
 })
 
-test('require.context：记警告', () => {
+test('require.context 不归这里管（由 dynamic-imports 处理）', () => {
   const r = find('src/a.js', "const ctx = require.context('./svg', false, /\\.svg$/)")
-  assert.deepEqual(r.globs, [])
-  assert.match(r.warnings[0].detail, /require\.context/)
+  assert.deepEqual(r, { globs: [], warnings: [] })
 })
 
 test('.vue 文件只看 <script>：模板里的撇号不会让后面的代码被当成字符串', () => {

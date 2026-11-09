@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-09
-- 测试：265 个，全部通过（`npm test`）
+- 测试：293 个，全部通过（`npm test`）
 
 ---
 
@@ -15,7 +15,7 @@
 | M1 | history 模块：引入、引用时间线、失去引用 | ✅ 完成（d4a518a） |
 | M2 | report：从 JSON 生成 Markdown 报告、文件头注释 | ✅ 完成（06c07de） |
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 第一版完成（待提交） |
-| M4 | rules：9 种状态的判定规则，补齐 fixture | ⏳ 未开始 |
+| M4 | rules：9 种状态的判定规则，补齐 fixture | 🚧 进行中：① unknown（动态加载）完成（待提交） |
 | M5 | verify：临时 worktree 实删，和构建 / 测试基线对比 | ⏳ 未开始 |
 | M6 | 接入第二个项目（Vue3 + TS） | ⏳ 未开始 |
 | M7 | 接口维度、quarantine、打包成 tgz | ⏳ 未开始 |
@@ -135,14 +135,14 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] `src/collect/glob-imports.js`：`import.meta.glob` 换算成入口
   - 支持相对路径、`/` 开头、别名、数组、`!` 排除；参数不是字符串字面量时记警告，不猜
   - `.vue` 等只看 `<script>`：模板里的撇号会让去注释把后面的代码当成字符串
-  - `require.context` 只记警告
+  - `require.context` 交给 dynamic-imports（M4）
 - [x] `src/collect/scan.js`：只用项目入口跑一次；配置了测试入口时再跑一次，两次一比得到「只有测试用到」
   - 测试文件本身、`scanIgnore` 匹配的文件不列为候选
 - [x] `src/collect/snapshot.js`：分析提交里的代码（默认 HEAD，`--rev` 可指定），不看工作区
   - 用临时索引（`GIT_INDEX_FILE`）读入提交，把配置扩展名的文件、入口、根目录的 package.json / tsconfig.json / jsconfig.json 导出到系统临时目录，用完删除
   - 不碰目标仓库的工作区、暂存区和分支；提交里没有 package.json 时在临时目录补一个空的（knip 要求有）
   - 提交号写进候选清单的 `rev`，history 默认查同一个提交；传了 `--rev` 又不一致时报错
-  - 证据只写事实（`knip-unreachable` / `knip-test-only`），状态由 history 统一写 unknown
+  - 证据写 knip 的结论（`knip-unreachable` / `knip-test-only`），状态由规则层判定（M4）
 - [x] 候选清单支持 `evidence`：scan 写的证据原样带进报告；人工写的没有证据，照旧是「人工列入候选」
 - [x] 候选清单的 `files` 可以是空数组：没有候选也能走完 history → report
 - [x] `code-audit scan` 命令：`--profile` 必填，输出安全规则和 history 一致
@@ -167,9 +167,44 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - ~~scan 按工作区分析，history 按提交查询：本地删掉一处 import 时，两边看到的代码不一样~~：scan 改为分析提交里的代码，提交号写进候选清单，history 默认查同一个提交
 - ~~没有候选时，scan 输出的 `files: []` 交给 history 会被判为无效~~：空数组合法
 
-### 下一步
+---
 
-M4 规则层：用 knip 和 history 的结论、引用关系判定 9 种状态。
+## M4 规则层 🚧
+
+方案 A：规则在 scan 里跑。scan 手上有提交里的代码、knip 的结果和候选全集，判定要用的数据都在这一步；
+候选清单写好状态、证据、引用，history 只补历史，不改结论。
+
+顺序按「越不敢删越先做」：
+
+| 顺序 | 状态 | 做法 | 状态 |
+|---|---|---|---|
+| ① | `unknown` | 路径里有变量的动态加载，圈出可能加载的文件 | ✅ 完成（待提交） |
+| ② | `external` | 在构建配置、index.html、scripts、public 里搜文件路径 | ⏳ |
+| ③ | `dormant` | 在注释里搜引用 | ⏳ |
+| ④ | `test-only` | 直接用 scan 的 knip 证据 | ⏳ |
+| ⑤ | `dead-only-ref` | 候选之间的引用关系 | ⏳ |
+| ⑥ | `dead` | 以上都不是 | ⏳ |
+| 后续 | `pending` / `internal` | 未合并分支 / 导出维度 | ⏳ |
+
+### 公共部分
+
+- [x] `src/rules/index.js`：每条规则返回命中的状态、证据、引用；命中多条取 STATUSES 里最靠前的，证据和引用都保留
+- [x] 一条都没命中的暂时也是 `unknown`，证据 `rules-incomplete` 说明「规则层还没做完」；规则做完后改成 `dead`
+- [x] 候选清单新增 `status`、`refs`；history 原样保留，人工写的清单没有就是 `unknown` 和空引用
+- [x] `src/collect/source-text.js`：读源码的公共工具（只看 `<script>`、去注释、读字符串），glob-imports 和 dynamic-imports 共用
+- [x] fixture 跑 scan：每个 fixture 复制成临时仓库，用真的 knip 跑。已做规则的状态必须和标准答案一致，没做的只检查列为候选、标着未判定
+
+### ① unknown：动态加载
+
+- [x] `src/collect/dynamic-imports.js`：找出拼接路径的 `import()` / `require()` 和 `require.context`
+  - 范围按路径里固定的开头和结尾算：`'./views/page-' + x + '.vue'` → views 目录（含子目录）、page- 开头、.vue 结尾
+  - 变量里可能有 `/`，一律含子目录；路径省略扩展名时，去掉扩展名再比较。宁可多圈
+  - `require.context` 按目录、是否含子目录、正则算；正则写错时不限文件
+  - 路径开头就是变量、包名、三元表达式：范围确定不了，记警告
+- [x] `src/rules/dynamic-load.js`：落在范围里的候选判为 `unknown`，每处加载一条证据、一条引用（`via: dynamic`）；加载方本身也是候选时在证据里注明
+- [x] 试验发现：knip 自己能处理模板字符串里的变量（`` import(`./views/${n}.vue`) `` 当成 glob，含子目录），这些文件算在用，不会成为候选；`+` 拼接和 `require.context` 它不处理
+- [x] finicr-web：所有 `import()` 都是固定路径，没有动态加载，结果不变（58 个候选）
+- [x] 反向检查：逐个撤掉关键逻辑（保留状态和引用、排除自己、非递归、省略扩展名、优先级、参数里的正则），每处都有测试失败
 
 ---
 
@@ -189,7 +224,8 @@ M4 规则层：用 knip 和 history 的结论、引用关系判定 9 种状态�
 | history 的 pattern 会匹配到同名目录下的其他文件：`config/field`（指 field/index.js）也匹配 `config/field/xxx` | 多算引用，显示「仍被引用」 | 低。不会误删；M4 改用 knip 的精确引用 |
 | history 的 pattern 会匹配到接口地址等字符串：`api/document` 匹配 `'/api/document/stream'` | 多算引用 | 低。不会误删 |
 | scan：写 import.meta.glob 的文件本身没人用时，被它加载的文件也当成在用 | 少报 | 低。不会误删 |
-| scan：`require.context` 不展开 | 被它加载的文件会被误报为走不到 | 中。只发警告；history 和规则层会兜底，实删前还有 verify |
+| 动态加载的路径开头就是变量（`import(path)`）时范围确定不了，只发警告 | 被它加载的文件仍会列为候选，状态暂时是「规则未做完」的 unknown；规则做完后可能落到 dead | 中。规则做完前要想办法：比如有这类警告时整批不判 dead |
+| 字符串里出现 `import(`、`require(` 字样时也会当成调用 | 多圈文件、多发警告 | 低。不会误删 |
 
 已确认不是问题：
 

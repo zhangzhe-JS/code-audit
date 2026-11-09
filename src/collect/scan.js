@@ -7,9 +7,9 @@
  * 2. 找出 import.meta.glob，换算成入口：knip 不认识这种写法
  * 3. 只用项目入口跑一次 knip：得到「从入口走不到」的文件
  * 4. 配置了测试入口时，再加上测试入口跑一次：两次一比，就知道哪些「只被测试用到」
+ * 5. 规则层判定状态（src/rules/）：比如落在拼接路径的 import() 范围里的，判为 unknown
  *
- * 这一步只回答「从入口走不到」，不判定状态（注释停用、只被死代码引用等由规则层判定），
- * 所以候选的证据只写事实，状态由 history 统一写成 unknown
+ * 候选清单里写好状态、证据、引用，history 只补历史，不改结论
  */
 import { DEFAULT_CONFIG } from './../core/config.js'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -17,6 +17,8 @@ import { join } from 'node:path'
 import { findGlobImports } from './glob-imports.js'
 import { buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
 import { createSnapshot } from './snapshot.js'
+import { findDynamicLoads } from './dynamic-imports.js'
+import { judge } from '../rules/index.js'
 
 /**
  * 仓库根目录下一并导出的配置文件：knip 找项目根目录、读路径别名时会用到。
@@ -84,10 +86,8 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
   }
 
   // 2. import.meta.glob → 入口
-  const { globs: globImports, warnings } = findGlobImports({
-    files: sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') })),
-    aliases: config.aliases
-  })
+  const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+  const { globs: globImports, warnings } = findGlobImports({ files: contents, aliases: config.aliases })
   const globEntries = [...new Set(globImports.map((g) => g.resolved))]
 
   // 参与分析的文件：源码目录下、配置的扩展名
@@ -124,8 +124,21 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
     files.push({ file, evidence: [evidenceFor(file, { withTests, stillUnused, version: knip.version })] })
   }
 
+  // 5. 规则层判定状态
+  const loads = findDynamicLoads({ files: contents, aliases: config.aliases })
+  for (const l of loads.filter((x) => x.scope === null)) {
+    warnings.push({
+      from: l.from,
+      line: l.line,
+      detail: `动态加载的路径确定不了范围：${l.expr}，被它加载的文件可能被误报为没人用`
+    })
+  }
+  const judged = judge({ files, loads })
+  const byStatus = {}
+  for (const f of judged) byStatus[f.status] = (byStatus[f.status] ?? 0) + 1
+
   return {
-    candidates: { project, rev: snap.commit, entries: [...config.entries], files },
+    candidates: { project, rev: snap.commit, entries: [...config.entries], files: judged },
     summary: {
       rev: snap.commit,
       engine: { name: 'knip', version: knip.version },
@@ -137,8 +150,10 @@ function scanSnapshot({ snap, project, config, knip, pluginNames, run }) {
         candidates: files.length,
         testOnly: files.filter((f) => f.evidence[0].rule === SCAN_RULES.testOnly).length,
         skippedTests: skipped.test,
-        skippedIgnored: skipped.ignored
+        skippedIgnored: skipped.ignored,
+        byStatus
       },
+      dynamicLoads: loads.length,
       outside: skipped.outside
     }
   }

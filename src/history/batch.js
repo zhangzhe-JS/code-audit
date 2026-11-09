@@ -1,15 +1,16 @@
 /**
  * 批量查询 git 历史：读一份候选清单，逐个文件查历史，组装成符合 schema 的完整数据（Report）
  *
- * 候选清单可以人工写，也可以由 scan 生成。状态一律是 unknown：还没有经过规则判定，不替规则下结论
- * 证据：scan 生成的候选自带证据（如「从入口走不到」），原样保留；人工写的没有证据，写「人工列入候选」
+ * 候选清单可以人工写，也可以由 scan 生成。history 只补历史，不改结论：
+ * - 状态、证据、引用：scan 生成的候选自带（规则层判定的结果），原样保留
+ * - 人工写的没有这些：状态写 unknown，证据写「人工列入候选」，引用为空
  *
  * 任何一个文件查询失败，整批都失败并列出所有错误，不输出缺了几项的半成品
  */
 import { resolveCommit } from './git.js'
 import { traceHistory } from './index.js'
 import { DEFAULT_CONFIG } from '../core/config.js'
-import { SCHEMA_VERSION, TAGS, validate } from '../core/schema.js'
+import { SCHEMA_VERSION, STATUSES, TAGS, VIAS, validate } from '../core/schema.js'
 import { TOOL } from '../core/tool.js'
 
 /** 人工列入的候选，在证据里统一写成这条 */
@@ -23,12 +24,22 @@ export const MANUAL_EVIDENCE = Object.freeze({
  * @property {string} project      项目名，写进报告标题
  * @property {string} [rev]        候选清单是按哪个提交分析的（完整提交号，scan 会写）；history 默认查这个提交
  * @property {string[]} [entries]  项目入口，相对仓库根目录；只用于记录，不影响历史查询
- * @property {{file: string, pattern?: string, notes?: string[], evidence?: {rule: string, detail: string, tag?: string}[]}[]} files
- *           要查的文件，可以是空数组（scan 没找到候选时）；evidence 由 scan 填，人工写时不用写
+ * @property {CandidateFile[]} files 要查的文件，可以是空数组（scan 没找到候选时）
+ */
+
+/**
+ * @typedef {object} CandidateFile
+ * @property {string} file
+ * @property {string} [pattern]
+ * @property {string[]} [notes]
+ * @property {string} [status]   以下三项由 scan 填，人工写时不用写
+ * @property {{rule: string, detail: string, tag?: string}[]} [evidence]
+ * @property {{from: string, line: number, via: string}[]} [refs]
  */
 
 const TOP_KEYS = ['project', 'rev', 'entries', 'files']
-const FILE_KEYS = ['file', 'pattern', 'notes', 'evidence']
+const FILE_KEYS = ['file', 'pattern', 'notes', 'status', 'evidence', 'refs']
+const REF_KEYS = ['from', 'line', 'via']
 const EVIDENCE_KEYS = ['rule', 'detail', 'tag']
 
 /**
@@ -73,6 +84,23 @@ export function validateCandidates(data) {
     if (f.pattern !== undefined && !isNonEmptyString(f.pattern)) errors.push(`${at}.pattern 必须是非空字符串`)
     if (f.notes !== undefined && !(Array.isArray(f.notes) && f.notes.every(isNonEmptyString))) {
       errors.push(`${at}.notes 必须是非空字符串组成的数组`)
+    }
+    if (f.status !== undefined && !STATUSES.includes(f.status)) errors.push(`${at}.status 不合法：${f.status}`)
+    if (f.refs !== undefined) {
+      if (!Array.isArray(f.refs)) {
+        errors.push(`${at}.refs 必须是数组`)
+      } else {
+        f.refs.forEach((ref, j) => {
+          const rat = `${at}.refs[${j}]`
+          if (!isPlainObject(ref)) return errors.push(`${rat} 必须是对象，如 { "from": "src/a.js", "line": 1, "via": "dynamic" }`)
+          for (const key of Object.keys(ref)) {
+            if (!REF_KEYS.includes(key)) errors.push(`${rat} 不认识的字段：${key}（可用的字段：${REF_KEYS.join('、')}）`)
+          }
+          if (!isRelativePath(ref.from)) errors.push(`${rat}.from 必须是相对仓库根目录的路径：${ref.from}`)
+          if (!Number.isInteger(ref.line) || ref.line < 1) errors.push(`${rat}.line 必须是正整数：${ref.line}`)
+          if (!VIAS.includes(ref.via)) errors.push(`${rat}.via 不合法：${ref.via}`)
+        })
+      }
     }
     if (f.evidence !== undefined) {
       if (!Array.isArray(f.evidence) || f.evidence.length === 0) {
@@ -128,9 +156,9 @@ export function buildReport({ root, candidates, rev, config = DEFAULT_CONFIG, no
         id: `file:${c.file}`,
         kind: 'file',
         target: c.file,
-        status: 'unknown',
+        status: c.status ?? 'unknown',
         evidence: c.evidence ? c.evidence.map((ev) => ({ ...ev })) : [{ ...MANUAL_EVIDENCE }],
-        refs: [],
+        refs: c.refs ? c.refs.map((ref) => ({ ...ref })) : [],
         history,
         verify: null,
         ...(c.notes ? { notes: [...c.notes] } : {})

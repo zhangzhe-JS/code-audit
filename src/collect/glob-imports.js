@@ -5,13 +5,13 @@
  * 所以 scan 先找出这些 glob，作为入口交给 knip。
  *
  * 只认字符串字面量（或字符串组成的数组）：参数是变量、拼接出来的字符串时无法换算，记一条警告
- * require.context 暂不展开，只记警告：被它加载的文件可能被误报
+ * require.context、拼接路径的 import() 由 dynamic-imports.js 处理
  *
  * 已知限制：
  * - 写 import.meta.glob 的文件本身没人用时，它加载的文件也会被当成在用（少报，不会误删）
  */
 import { posix } from 'node:path'
-import { stripComments } from './strip-comments.js'
+import { codeOf, lineAt, readString, skipSpace } from './source-text.js'
 
 /**
  * @typedef {object} GlobImport
@@ -39,9 +39,8 @@ export function findGlobImports({ files, aliases = {} }) {
   const warnings = []
 
   for (const { path, content } of files) {
-    if (!content.includes('import.meta.glob') && !content.includes('require.context')) continue
-    // 去掉注释：注释里的 glob 不算；去注释后行号不变
-    const code = stripComments(SFC_EXTENSIONS.some((e) => path.endsWith(e)) ? scriptOnly(content) : content)
+    if (!content.includes('import.meta.glob')) continue
+    const code = codeOf(path, content)
 
     for (const m of code.matchAll(/import\.meta\.glob(?:Eager)?\s*\(/g)) {
       const line = lineAt(code, m.index)
@@ -58,14 +57,6 @@ export function findGlobImports({ files, aliases = {} }) {
           globs.push({ from: path, line, pattern, resolved })
         }
       }
-    }
-
-    for (const m of code.matchAll(/\brequire\.context\s*\(/g)) {
-      warnings.push({
-        from: path,
-        line: lineAt(code, m.index),
-        detail: 'require.context 暂不支持展开，被它加载的文件可能被误报为没人用'
-      })
     }
   }
   return { globs, warnings }
@@ -129,73 +120,4 @@ function readLiterals(code, i) {
   }
   const lit = readString(code, i)
   return lit === null ? null : [lit.value]
-}
-
-/** 读一个字符串字面量，返回内容和结束位置；不是字面量返回 null */
-function readString(code, i) {
-  const quote = code[i]
-  if (quote !== "'" && quote !== '"' && quote !== '`') return null
-  let value = ''
-  for (let j = i + 1; j < code.length; j++) {
-    const ch = code[j]
-    if (ch === '\\') {
-      value += code[j + 1] ?? ''
-      j++
-    } else if (ch === quote) {
-      return { value, end: j + 1 }
-    } else if (quote === '`' && ch === '$' && code[j + 1] === '{') {
-      return null // 模板字符串里有变量：不是固定的值
-    } else if (ch === '\n' && quote !== '`') {
-      return null
-    } else {
-      value += ch
-    }
-  }
-  return null
-}
-
-/** 单文件组件：模板里的文字不是 JS，只看 <script> 里的内容 */
-const SFC_EXTENSIONS = ['.vue', '.svelte', '.astro']
-
-/**
- * 只保留 <script> 块里的内容，其余部分换成同样多的空行，行号不变
- * .astro 的代码写在开头的 --- 之间，也一并保留
- * @param {string} content
- */
-export function scriptOnly(content) {
-  const keep = []
-  for (const m of content.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
-    const start = m.index + m[0].indexOf('>') + 1
-    keep.push([start, start + m[1].length])
-  }
-  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
-  if (fm) {
-    const start = content.indexOf('\n') + 1 // 第一行 --- 之后
-    keep.push([start, start + fm[1].length])
-  }
-  keep.sort((a, b) => a[0] - b[0])
-
-  let out = ''
-  let pos = 0
-  for (const [s, e] of keep) {
-    if (s < pos) continue
-    out += blankLines(content.slice(pos, s)) + content.slice(s, e)
-    pos = e
-  }
-  return out + blankLines(content.slice(pos))
-}
-
-function blankLines(text) {
-  return '\n'.repeat((text.match(/\n/g) ?? []).length)
-}
-
-function skipSpace(code, i) {
-  while (i < code.length && /\s/.test(code[i])) i++
-  return i
-}
-
-function lineAt(code, index) {
-  let line = 1
-  for (let i = 0; i < index; i++) if (code[i] === '\n') line++
-  return line
 }

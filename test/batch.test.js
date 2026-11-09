@@ -323,3 +323,38 @@ test('空清单能走完 history → report', (t) => {
   assert.equal(r.status, 0, r.stderr)
   assert.match(readFileSync(join(dir, 'out', 'report.md'), 'utf8'), /## 详情\n\n无/)
 })
+
+// ---------- scan 写的状态和引用 ----------
+
+test('候选清单：status、refs 写错时报出来', () => {
+  const errs = validateCandidates(
+    candidates({
+      files: [
+        { file: 'a.js', status: 'gone', refs: 'x' },
+        { file: 'b.js', refs: [{ from: '/abs.js', line: 0, via: 'magic', extra: 1 }, 'x'] }
+      ]
+    })
+  ).join('\n')
+  for (const re of [/files\[0\]\.status 不合法：gone/, /files\[0\]\.refs 必须是数组/, /refs\[0\] 不认识的字段：extra/,
+    /refs\[0\]\.from 必须是相对/, /refs\[0\]\.line 必须是正整数/, /refs\[0\]\.via 不合法：magic/, /refs\[1\] 必须是对象/]) {
+    assert.match(errs, re)
+  }
+})
+
+test('buildReport：候选清单里的状态和引用原样保留；没写时是 unknown 和空引用', (t) => {
+  const repo = demoRepo()
+  t.after(() => repo.cleanup())
+  const ref = { from: 'src/views/Home.vue', line: 2, via: 'dynamic' }
+  const report = buildReport({
+    root: repo.root,
+    candidates: candidates({
+      files: [{ file: 'src/utils/math.js', status: 'dormant', refs: [ref] }, { file: 'src/utils/unused.js' }]
+    })
+  })
+  const [math, unused] = report.items
+  assert.equal(math.status, 'dormant')
+  assert.deepEqual(math.refs, [ref])
+  assert.equal(unused.status, 'unknown')
+  assert.deepEqual(unused.refs, [])
+  assert.deepEqual(validate(report), [])
+})

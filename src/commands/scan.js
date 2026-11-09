@@ -15,7 +15,8 @@ import { scan } from '../collect/scan.js'
 const USAGE = `用法：code-audit scan --root <仓库> --profile <配置> [选项]
 
 找出从入口走不到的文件，输出候选清单，再交给 history --in 查历史。
-用 knip 分析（code-audit 的可选依赖）；只回答「从入口走不到」，不判定状态。
+用 knip 分析（code-audit 的可选依赖），再由规则层判定状态。
+规则还没做完：目前只判定动态加载（unknown），其余候选暂时也是 unknown，证据里有说明。
 分析的是提交里的代码，工作区没提交的改动不算；提交号写进候选清单，history 默认查同一个提交。
 
 选项：
@@ -93,6 +94,7 @@ function printSummary(s) {
   console.error(`分析提交 ${s.rev}（工作区没提交的改动不算）`)
   console.error(`knip ${s.engine.version}：从入口走不到 ${c.unused} 个文件`)
   console.error(`  列为候选 ${c.candidates} 个（其中只有测试用到 ${c.testOnly} 个）`)
+  console.error(`  状态：${Object.entries(c.byStatus).map(([k, v]) => `${k} ${v} 个`).join('，') || '无'}`)
   if (c.skippedTests > 0) console.error(`  跳过测试文件 ${c.skippedTests} 个`)
   if (c.skippedIgnored > 0) console.error(`  跳过 scanIgnore 匹配的 ${c.skippedIgnored} 个`)
   if (s.outside.length > 0) {
@@ -103,6 +105,7 @@ function printSummary(s) {
     console.error(`  import.meta.glob 换算成入口 ${s.globs.length} 处：`)
     for (const g of s.globs) console.error(`    - ${g.from}:${g.line}  ${g.pattern} → ${g.resolved}`)
   }
+  if (s.dynamicLoads > 0) console.error(`  拼接路径的动态加载 ${s.dynamicLoads} 处，落在范围里的候选判为 unknown`)
   if (s.warnings.length > 0) {
     console.error(`  注意 ${s.warnings.length} 处：`)
     for (const w of s.warnings) console.error(`    - ${w.from}:${w.line}  ${w.detail}`)

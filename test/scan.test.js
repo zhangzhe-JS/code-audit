@@ -242,6 +242,30 @@ test('scan：没有候选时，空清单也能通过 history 的校验', (t) => 
   assert.deepEqual(validateCandidates(r.candidates), [])
 })
 
+test('scan：规则层判定状态，落在动态加载范围里的是 unknown；范围确定不了的记警告', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('src/loader.js', "export const l = (n) => import('./pages/' + n)\nexport const x = (p) => import(p)\n")
+  repo.write('src/pages/a.js', '')
+  repo.commit('动态加载')
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/pages/a.js'] })
+  const r = scan({ root: repo.root, project: 'p', config: resolveConfig({ entries: ['src/main.js'] }), knipDir, run: fake.run })
+
+  const [dead, page] = r.candidates.files
+  assert.equal(page.status, 'unknown')
+  assert.deepEqual(page.refs, [{ from: 'src/loader.js', line: 1, via: 'dynamic' }])
+  assert.deepEqual(page.evidence.map((e) => e.rule), [SCAN_RULES.unreachable, 'dynamic-load'])
+  assert.deepEqual(dead.evidence.map((e) => e.rule), [SCAN_RULES.unreachable, 'rules-incomplete'])
+  assert.deepEqual(r.summary.counts.byStatus, { unknown: 2 })
+  assert.equal(r.summary.dynamicLoads, 2)
+  assert.match(r.summary.warnings.map((w) => `${w.from}:${w.line} ${w.detail}`).join('\n'), /src\/loader\.js:2 动态加载的路径确定不了范围：import\(p\)/)
+  assert.deepEqual(validateCandidates(r.candidates), [])
+})
+
 test('scan：生成的候选清单能通过 history 的校验', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()
