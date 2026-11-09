@@ -1,24 +1,32 @@
 /**
  * verify 子命令：在临时目录里实际删掉候选文件，跑构建、测试，和基线比较
  *
- * 现在支持：
- *   code-audit verify --root <仓库> --profile <配置>     试跑基线：确认配置的命令能在临时目录里无人值守跑通
- * 下一步支持：
- *   --in <data.json> --out <结果.json>                   删掉候选后对比
+ * 两种用法：
+ *   code-audit verify --root <仓库> --profile <配置>                       试跑基线：确认配置的命令能在临时目录里无人值守跑通
+ *   code-audit verify --root <仓库> --profile <配置> --in <data.json> --out <结果.json>
+ *                                                                         删掉 dead / dead-only-ref 后和基线比较，结果写进数据
  *
  * 只读：代码导出到系统临时目录，依赖克隆一份，构建、测试都在那里跑；目标仓库不写任何东西
  */
 import { parseArgs } from 'node:util'
 import { dirname, join, resolve } from 'node:path'
 import { loadProfile } from '../core/config.js'
+import { assertOutsideRepo, pathExists, readJson, writeFileSafely } from '../core/output.js'
+import { MAX_ROUNDS, verifyReport } from '../verify/index.js'
 import { git } from '../history/git.js'
 import { createWorkspace } from '../verify/workspace.js'
 import { describe, runSteps } from '../verify/baseline.js'
 import { tail } from '../verify/run-command.js'
 
-const USAGE = `用法：code-audit verify --root <仓库> --profile <配置> [选项]
+const USAGE = `用法：
+  code-audit verify --root <仓库> --profile <配置>                          试跑基线
+  code-audit verify --root <仓库> --profile <配置> --in <数据> --out <结果>  删掉候选后和基线比较
 
-在临时目录里跑项目的构建、测试。现在只支持试跑基线：确认配置的命令能无人值守跑通。
+在临时目录里跑项目的构建、测试。
+- 试跑基线：确认配置的命令能无人值守跑通
+- 带 --in：把 dead、dead-only-ref 实际删掉再跑，和基线比较。全部通过一般只要 2 轮；
+  不通过时先从报错里认出是哪些文件，认不出再对半找（最多 ${MAX_ROUNDS} 轮）。
+  删了会出问题的，状态改为 unknown，证据写上出了什么问题
 
 会执行项目自己的命令（构建脚本等）：只在系统临时目录里的拷贝上跑，依赖克隆一份，不碰原项目。
 
@@ -27,8 +35,10 @@ const USAGE = `用法：code-audit verify --root <仓库> --profile <配置> [�
   --profile  项目配置文件（必填），要写 verify 的命令，如：
                verify: { build: 'npm run build', test: 'npm test' }
              命令必须能无人值守跑完；超时默认 30 分钟，可以写 timeoutSeconds
-  --rev      用哪个提交，默认 HEAD
-  --keep     跑完不删临时目录（排查用），会打印路径
+  --in       history 输出的数据（data.json）；用数据里记录的提交
+  --out      结果写到这个文件；不传就打印出来。不能写在被分析的仓库里，文件不能已存在
+  --rev      试跑基线时用哪个提交，默认 HEAD（带 --in 时用数据里的提交）
+  --keep     试跑基线时跑完不删临时目录（排查用），会打印路径
   -h, --help 显示帮助`
 
 export async function run(argv) {
@@ -40,6 +50,8 @@ export async function run(argv) {
         root: { type: 'string' },
         profile: { type: 'string' },
         rev: { type: 'string' },
+        in: { type: 'string' },
+        out: { type: 'string' },
         keep: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' }
       }
@@ -54,6 +66,12 @@ export async function run(argv) {
   if (!values.profile) return fail(`缺少 --profile（要在配置里写 verify 的命令）\n\n${USAGE}`)
 
   const root = resolve(values.root ?? '.')
+  if (values.in) {
+    if (values.rev) return fail('带 --in 时用数据里记录的提交，不能再传 --rev')
+    if (values.keep) return fail('--keep 只用于试跑基线')
+    return verifyData(root, values)
+  }
+  if (values.out) return fail('--out 要和 --in 一起用')
   const rev = values.rev ?? 'HEAD'
   let ws = null
   try {
@@ -89,6 +107,45 @@ export async function run(argv) {
     fail(e.message)
   } finally {
     if (ws && !values.keep) ws.cleanup()
+  }
+}
+
+/** 带 --in：删掉候选后和基线比较 */
+async function verifyData(root, values) {
+  try {
+    const config = await loadProfile(values.profile)
+    if (!config.verify.build && !config.verify.test) {
+      throw new Error(`配置里没有写 verify 的命令。命令没有默认值：各项目不同，猜错了就是乱跑。\n${suggestScripts(root, 'HEAD')}`)
+    }
+    // 先检查输出位置再开始：跑一遍要几分钟，别跑完才发现写不进去
+    if (values.out) {
+      assertOutsideRepo(values.out, root)
+      if (pathExists(values.out)) throw new Error(`输出文件已存在：${resolve(values.out)}（工具不覆盖已有文件，请换一个文件名）`)
+    }
+    const started = Date.now()
+    const log = (msg) => console.error(msg)
+    const { data, summary } = await verifyReport({ data: readJson(values.in), root, config, log })
+    const json = `${JSON.stringify(data, null, 2)}\n`
+
+    log(`\n验证了 ${summary.targets} 个文件，共 ${summary.rounds} 轮，用时 ${Math.round((Date.now() - started) / 60000)} 分钟`)
+    log(`  删掉后和基线一致：${summary.passed} 个`)
+    if (summary.failed > 0) {
+      log(`  删了会出问题（状态改为 unknown）：${summary.failed} 个`)
+      for (const b of summary.bad ?? []) log(`    - ${b.files.join('、')}：${b.problems.join('、')}`)
+    }
+    if (summary.unverified > 0) log(`  轮数用完还没确认（未验证）：${summary.unverified} 个`)
+    if (summary.newWarnings?.length > 0) {
+      log(`  删掉后新增的构建警告 ${summary.newWarnings.length} 条（不算失败，请人工看一下）：`)
+      for (const w of summary.newWarnings.slice(0, 10)) log(`    - ${w}`)
+    }
+    if (values.out) {
+      writeFileSafely(values.out, json)
+      log(`结果写入：${resolve(values.out)}`)
+    } else {
+      process.stdout.write(json)
+    }
+  } catch (e) {
+    fail(e.message)
   }
 }
 

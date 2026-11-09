@@ -6,7 +6,7 @@
 2. **它是怎么变成没人用的？** 用 git 追溯引入、引用和失去引用的提交
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
-> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做。verify 进行中：已能在临时目录里试跑基线。进度见 `docs/progress.md`。
+> 状态：开发中。M0（骨架）、M1（history）、M2（report）已完成，M3（scan）第一版完成：scan → history → report 可以完整跑通。M4（规则层）第一批完成：每个候选都判出状态并写明原因；其他分支在用（`pending`）、文件内部在用（`internal`）还没做。verify 进行中：已能在临时目录里删掉候选、和基线比较。进度见 `docs/progress.md`。
 
 ---
 
@@ -223,11 +223,22 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js [--k
 
 代码从提交里导出到系统临时目录，`node_modules` 克隆一份（macOS 上几秒、不占额外磁盘），构建、测试都在那里跑，原项目不写任何东西。`--keep` 保留临时目录和完整日志，排查用。
 
+**6. 实删验证**：把 `dead`、`dead-only-ref` 实际删掉，跑构建、测试，和基线比较：
+
+```bash
+node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js --in reports/my-app/data.json --out reports/my-app/verified.json
+node bin/code-audit.js report --profile profiles/my-app.js --in reports/my-app/verified.json --out reports/my-app/out
+```
+
+- 只看新增的问题：基线本来就失败的测试、本来就有的警告不算
+- 全部删掉没问题，一般 2 轮就结束；有问题时先从报错里认出是哪些文件，认不出再对半找（最多 40 轮）
+- 有 import 关系的候选绑在一起删（引用方和被引用的），不会冤枉被引用的
+- 删了会出问题的，状态改为 `unknown`，证据写上出了什么问题；新增的构建警告列出来给人看，不算失败
+
 ### 规划中
 
 ```bash
-node bin/code-audit.js verify     --root ../my-app --profile p.js --in data.json  # M5：删掉候选后和基线对比
-node bin/code-audit.js quarantine --root ../my-app --in data.json                 # M7：隔离（会改动目标项目）
+node bin/code-audit.js quarantine --root ../my-app --in verified.json             # M7：隔离（会改动目标项目）
 ```
 
 ---
