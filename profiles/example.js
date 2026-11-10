@@ -53,5 +53,7 @@ export default {
   branches: { ignore: ['origin/release/**'], maxAgeDays: 180 },
 
   // verify 在临时目录里跑的命令（没有默认值），必须能无人值守跑完
-  verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800 }
+  // bundler 可选：基线构建时记下打包器加载过的模块，加载过的候选不删（判 unknown）；目前支持 vite
+  // 配置文件不在默认位置（vite.config.*）时加 bundlerConfig: 'web/vite.config.ts'
+  verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800, bundler: 'vite' }
 }

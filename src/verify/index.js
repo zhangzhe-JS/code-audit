@@ -5,11 +5,14 @@
  * - 基线构建本来就失败时无法验证，直接报错；基线测试本来就有失败的，按「新增失败」比较
  * - 删了会出问题的：status 改成 unknown，证据写上实际删掉后出的问题。静态分析没看出来的使用，不能当死代码
  * - 轮数用完还没确认的：verify 留空（未验证），状态不变
+ * - 启用了打包器证据（verify.bundler）：静态分析说当前构建用不到（CLAIMS_UNUSED）、基线构建却加载了的，判 unknown。
+ *   要删的就不删了：这类文件删了多半构建失败，提前拿掉就不用走对半查找
+ * - 基线有缓存就复用（cache.js）：重跑时省掉一遍构建和测试
  */
 import { readFileSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { createWorkspace } from './workspace.js'
-import { runSteps } from './baseline.js'
+import { prepareBaseline, runSteps } from './baseline.js'
 import { runCommand } from './run-command.js'
 import { compare } from './signals.js'
 import { locate } from './locate.js'
@@ -18,6 +21,12 @@ import { validate } from '../core/schema.js'
 
 /** 要验证的状态：静态分析认为能删的 */
 export const DELETABLE = Object.freeze(['dead', 'dead-only-ref'])
+
+/**
+ * 这些状态都在说「当前分支的构建用不到它」（其他分支在用、只有测试用、只在注释里、没人用）。
+ * 打包器却加载了它，说明静态分析漏看了引用，结论不可信
+ */
+export const CLAIMS_UNUSED = Object.freeze(['dead', 'dead-only-ref', 'test-only', 'dormant', 'pending'])
 
 /** 轮数上限：一轮几十秒到几分钟，几十轮就是一两个小时，再多不如人工看 */
 export const MAX_ROUNDS = 40
@@ -30,30 +39,68 @@ export const MAX_ROUNDS = 40
  * @param {(msg: string) => void} [opts.log]
  * @param {number} [opts.maxRounds]
  * @param {typeof runCommand} [opts.run] 测试时可以替换
+ * @param {boolean} [opts.useCache] 复用缓存的基线，默认 true
+ * @param {string} [opts.cacheDir]  测试时可以换
  * @returns {Promise<{data: import('../core/schema.js').Report, summary: object}>}
  */
-export async function verifyReport({ data, root, config, log = () => {}, maxRounds = MAX_ROUNDS, run = runCommand }) {
+export async function verifyReport({ data, root, config, log = () => {}, maxRounds = MAX_ROUNDS, run = runCommand, useCache = true, cacheDir }) {
   const errors = validate(data)
   if (errors.length > 0) throw new Error(`数据不符合格式：\n- ${errors.join('\n- ')}`)
   if (!config.verify.build && !config.verify.test) throw new Error('配置里没有写 verify 的命令（build、test）')
 
-  const targets = data.items.filter((i) => i.kind === 'file' && DELETABLE.includes(i.status)).map((i) => i.target)
+  let targets = data.items.filter((i) => i.kind === 'file' && DELETABLE.includes(i.status)).map((i) => i.target)
   const result = structuredClone(data)
   if (targets.length === 0) {
     log('没有要验证的文件（dead、dead-only-ref）')
-    return { data: result, summary: { targets: 0, passed: 0, failed: 0, unverified: 0, rounds: 0 } }
+    return { data: result, summary: { targets: 0, passed: 0, failed: 0, unverified: 0, rounds: 0, bundled: [], contradicted: [] } }
   }
+  const total = targets.length
 
   log(`准备临时目录：提交 ${data.project.rev}`)
   const ws = createWorkspace({ root, rev: data.project.rev })
   try {
     const steps = (logDir) => runSteps({ cwd: ws.dir, verify: config.verify, run, logDir })
-    log('跑基线（不删任何文件）…')
-    const baseline = await steps()
+    log('基线（不删任何文件）…')
+    const base = await prepareBaseline({ root, ws, verify: config.verify, useCache, cacheDir, run, log })
+    const baseline = base.results
     if (baseline.build && !baseline.build.ok) {
       throw new Error('基线构建就失败了，无法判断删文件有没有影响。先用 verify（不带 --in）试跑，确认构建命令能跑通')
     }
     if (baseline.test && !baseline.test.ok) log('  基线测试本来就有失败：按「新增失败的测试」比较')
+
+    // 打包器加载过、静态分析却说「当前构建用不到」的：判 unknown，要删的不删
+    const contradicted = base.modules ? result.items.filter((i) => i.kind === 'file' && CLAIMS_UNUSED.includes(i.status) && base.modules.has(i.target)) : []
+    const bundled = contradicted.filter((i) => targets.includes(i.target)).map((i) => i.target)
+    if (config.verify.bundler) {
+      if (base.bundlerDropped) {
+        log(`  没有打包器证据：${base.bundlerDropped}。照常验证`)
+      } else if (!base.modules) {
+        log(`  没拿到打包器的模块列表：构建没有经过套好的配置（构建命令用了别的配置文件？可以在 verify.bundlerConfig 里写上）。照常验证，只是没有这条证据`)
+      } else {
+        log(`  打包器（${config.verify.bundler}）记录了 ${base.builds} 次构建，加载了 ${base.modules.size} 个源码文件`)
+        if (contradicted.length > 0) {
+          log(`  其中 ${contradicted.length} 个静态分析说当前构建用不到（${[...new Set(contradicted.map((i) => i.status))].join('、')}），构建却加载了：判 unknown${bundled.length > 0 ? `，${bundled.length} 个要删的不删` : ''}`)
+        }
+      }
+    }
+    for (const item of contradicted) {
+      const was = item.status
+      item.status = 'unknown'
+      item.evidence.push({
+        rule: 'bundler-included',
+        detail: `构建（${config.verify.bundler}）加载了这个文件，和静态分析的结论（${was}）矛盾：静态分析漏看了引用（可能是 glob、插件、别名等）。${DELETABLE.includes(was) ? '不删，' : ''}请人工确认`
+      })
+    }
+    targets = targets.filter((t) => !bundled.includes(t))
+    if (targets.length === 0) {
+      log('剩下没有要删的文件')
+      const errs = validate(result)
+      if (errs.length > 0) throw new Error(`生成的数据不符合格式（工具内部错误）：\n- ${errs.join('\n- ')}`)
+      return {
+        data: result,
+        summary: { targets: total, passed: 0, failed: 0, unverified: 0, rounds: 0, bundled, contradicted: contradicted.map((i) => i.target), bundlerDropped: base.bundlerDropped, baselineCachedAt: base.cachedAt }
+      }
+    }
 
     const workDirs = [ws.dir, realpathSync(ws.dir)]
     const units = groupUnits(result.items, targets)
@@ -114,7 +161,11 @@ export async function verifyReport({ data, root, config, log = () => {}, maxRoun
     return {
       data: result,
       summary: {
-        targets: targets.length,
+        targets: total,
+        bundled,
+        contradicted: contradicted.map((i) => i.target),
+        bundlerDropped: base.bundlerDropped,
+        baselineCachedAt: base.cachedAt,
         passed: finalFailed ? 0 : count(search.good),
         failed: count(search.bad.map((b) => b.unit)) + (finalFailed ? count(search.good) : 0),
         unverified: count(search.unverified),

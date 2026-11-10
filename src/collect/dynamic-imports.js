@@ -17,6 +17,7 @@
  */
 import { resolvePattern } from './glob-imports.js'
 import { codeOf, inStringAt, lineAt, readString } from './source-text.js'
+import { joinedPathOf } from './external-refs.js'
 
 /**
  * @typedef {object} DynamicLoad
@@ -38,6 +39,7 @@ import { codeOf, inStringAt, lineAt, readString } from './source-text.js'
  * @property {string} suffix      结尾（require.context 时为空）
  * @property {RegExp|null} regex  require.context 的正则：对「./相对 dir 的路径」测试；null = 不限
  * @property {Set<string>} [files] 直接给出可能用到的文件（名字是变量的动态组件：所有全局组件）；有它时只看它
+ * @property {string[]} [paths] 算得出的路径（require(path.join(ROOT, 'x'))）：这个文件、省略扩展名的写法、目录的 index；有它时只看它
  */
 
 const CALLS = /(?<![\w$.])(import|require\.context|require)\s*\(/g
@@ -76,6 +78,7 @@ export function findDynamicLoads({ files, aliases = {} }) {
  */
 export function inScope(file, scope) {
   if (scope.files) return scope.files.has(file)
+  if (scope.paths) return scope.paths.some((p) => file === p || file.replace(/\.[^./]+$/, '') === p || file.startsWith(`${p}/index.`))
   if (scope.dir !== '' && !file.startsWith(`${scope.dir}/`)) return false
   const rel = scope.dir === '' ? file : file.slice(scope.dir.length + 1)
   if (!scope.recursive && rel.includes('/')) return false
@@ -90,6 +93,10 @@ const STATIC = Symbol('static')
 
 /** import() / require() 的第一个参数：拼接路径时返回范围；路径固定返回 STATIC */
 function concatScope(arg, from, aliases) {
+  // path.join(ROOT, 'package.json') 这类各段都算得出的：就是那几个路径，不是整个仓库
+  // （变量 ROOT 不知道指哪里，按仓库根目录和文件所在目录各算一个）
+  const joined = joinedPathOf(arg, from)
+  if (joined) return { dir: '', wide: false, recursive: true, prefix: '', suffix: '', regex: null, paths: joined }
   const segs = segmentsOf(arg)
   if (!segs.includes(DYNAMIC)) return STATIC
   const prefix = typeof segs[0] === 'string' ? segs[0] : ''

@@ -5,7 +5,8 @@
  * - 移动用 git mv：改名已经暂存好，git 认得出是改名，文件历史接得上
  * - 头注释、相对路径、README 只改文件、不暂存：开发人员看 diff 就知道改了什么
  *   （建议先提交暂存好的改名，再提交其余改动：小文件改了内容又一起提交，可能被 git 当成删了再新建）
- * 任何一步出错：工作区和暂存区回到执行前（执行前要求工作区干净），删掉这次新建的 README 和空目录
+ * 任何一步出错：工作区和暂存区回到执行前（执行前要求已跟踪的文件没改动），删掉这次新建的 README 和空目录，
+ * 追加过的 README 写回原来的内容（没被 git 跟踪的 README，reset 管不到）
  *
  * 调用前由命令检查：工作区干净、HEAD 就是分析的提交
  */
@@ -36,6 +37,8 @@ import { makeLocator, rewriteRelativePaths } from './rewrite.js'
 export function applyPlan({ root, plan, config, movedAt, branch, log = () => {} }) {
   if (plan.moves.length === 0) throw new Error('没有要隔离的文件')
   const createdFiles = []
+  /** 追加前的 README：路径 → 原内容 */
+  const originals = new Map()
   const createdDirs = []
   const result = { moved: [], rewrites: [], headers: [], readmes: [] }
   try {
@@ -70,24 +73,27 @@ export function applyPlan({ root, plan, config, movedAt, branch, log = () => {} 
     for (const r of plan.readmes) {
       const readme = join(root, r.path)
       const exists = existsSync(readme)
-      if (!exists) createdFiles.push(readme)
-      writeFileSync(readme, readmeContent(exists ? readFileSync(readme, 'utf8') : null, r, { config, movedAt, branch }))
+      const before = exists ? readFileSync(readme, 'utf8') : null
+      if (exists) originals.set(readme, before)
+      else createdFiles.push(readme)
+      writeFileSync(readme, readmeContent(before, r, { config, movedAt, branch }))
       result.readmes.push({ path: r.path, created: !exists })
     }
     return result
   } catch (e) {
-    rollback(root, { createdFiles, createdDirs })
+    rollback(root, { createdFiles, createdDirs, originals })
     throw new Error(`隔离没有完成，已撤回，目标项目和执行前一样：\n${e.message}`)
   }
 }
 
 /**
- * 撤回：已跟踪的文件和暂存区回到 HEAD（执行前要求工作区干净，不会丢别的改动），
- * 删掉这次新建的 README 和目录（新建的文件没被 git 跟踪，reset 不管它们）
+ * 撤回：已跟踪的文件和暂存区回到 HEAD（执行前要求已跟踪的文件没改动，不会丢别的改动），
+ * 追加过的 README 写回原内容，删掉这次新建的 README 和目录（没被 git 跟踪的文件，reset 不管它们）
  */
-function rollback(root, { createdFiles, createdDirs }) {
+function rollback(root, { createdFiles, createdDirs, originals }) {
   try {
     git(root, ['reset', '--hard', 'HEAD'])
+    for (const [f, content] of originals) writeFileSync(f, content)
     for (const f of createdFiles) rmSync(f, { force: true })
     for (const d of [...createdDirs].reverse()) {
       const p = join(root, d)

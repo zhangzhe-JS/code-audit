@@ -18,7 +18,8 @@
 | M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批（306951b～3df184c）；第二批 pending 完成；internal 随导出维度一起做 |
 | M5 | verify：临时目录实删，和构建 / 测试基线对比 | ✅ ① 试跑基线（fe163a1）、② 删除对比 + 定位（3a34279） |
 | M6 | 接入第二个项目（Vue3 + TS） | ✅ findip-portal-web 全流程跑通 |
-| M7 | quarantine、打包成 tgz（接口维度、导出维度往后放） | ✅ quarantine（ccfe973、260c9c2）、打包成 tgz（0.1.0，待提交） |
+| M7 | quarantine、打包成 tgz（接口维度、导出维度往后放） | ✅ quarantine（ccfe973、260c9c2）、打包成 tgz（0.1.0，9d9566a） |
+| M8 | verify 提速：打包器证据（vite）、基线缓存 | ✅ 完成（待提交） |
 
 ---
 
@@ -459,7 +460,73 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
   人工确认这 12 处都只会是图标、路由组件后，写进 `reviewedDynamicLoads` 才会回到 dead
 - 反向检查：逐个撤掉 18 处关键逻辑，每处都有测试失败
 
-## 修已知问题、去掉定制化、打包（待提交）
+## M8 verify 提速：打包器证据、基线缓存 ✅（待提交）
+
+起因：tree-shaking 和 scan 都是分析依赖图。打包器的模块图按真实构建的规则算（别名、插件、glob），比静态分析准，
+但要真跑构建、只覆盖一种构建模式，所以不拿来做 scan 的第一步，而是当一条额外证据。
+
+### 决定
+
+- **不在 scan 里另跑构建**：verify 本来就要跑基线构建，从这次构建里顺便拿模块列表，不多跑任何一次
+- **只用一个方向**：静态分析判死、打包器却加载了 → 不删，判 `unknown`（证据 `bundler-included`）。
+  打包器没加载的不拿来判死（测试、脚本、别的构建模式可能在用）。新证据只会让结论更保守
+- **差异放适配器**：profile 写 `verify.bundler: 'vite'` 才启用，没有默认值；目前只有 vite 适配器，webpack 遇到项目再加
+- **基线缓存**：按完整提交号、verify 设置、各 node_modules 里包管理器记录文件的大小和修改时间、Node 版本、工具版本区分。
+  试跑基线会写缓存，带 `--in` 时直接复用；`--fresh` 不用缓存。环境变量不在键里
+
+### 实现
+
+- `src/verify/bundlers/vite.js`：临时目录里把 `vite.config.*` 改名为 `*.code-audit-original.*`，原位置写包装配置：
+  原样返回原配置（对象还是对象、函数还是函数，具名导出转出去），plugins 末尾加 `code-audit:modules`（只在 build 生效）。
+  构建结束时把 `this.getModuleIds()`（整个模块图，包括被摇空的）和产物各 chunk 的模块写成 JSON
+- `src/verify/bundlers/index.js`：模块 id 换成相对仓库根目录的文件（去查询参数、虚拟模块、依赖包；/var 和 /private/var 都认）
+- `src/verify/cache.js`：缓存读写（先写临时文件再改名），30 天没用的清掉
+- `src/verify/baseline.js` 的 `prepareBaseline`：套配置 → 有缓存就复用 → 没有就跑、收模块、存缓存
+- **兜底**：套了配置后基线构建失败 → 撤掉这一层重跑，照常验证，没有打包器证据，原因写进输出和缓存（复用缓存时也撤掉，删文件的每一轮要和基线一样）
+
+### 真实项目（只读，都在临时目录里跑）
+
+| 项目 | 结果 |
+|---|---|
+| finicr-web（Vite 3，vite.config.js，打成 CJS） | 记录 1 次构建、742 个源码文件；40 个候选都不在里面（和 knip 一致）；1 轮通过，90 秒 |
+| 同上，重跑 | 复用基线，**47 秒** |
+| 对照：把在用的 `src/api/aiAsset.js` 故意标成 dead | 关掉打包器证据：3 轮、2 分 19 秒；打开：直接判 unknown，1 轮、48 秒 |
+| findip-portal-web（Vite 5，vite.config.ts） | 第一次失败：构建前的 eslint 检查到生成的配置（prettier、curly）→ 生成的配置开头加 `/* eslint-disable */`、`// @ts-nocheck`，并加上「失败就撤掉重跑」的兜底。之后记录 187 个源码文件，1 轮通过，复用基线 30 秒 |
+
+对照实验里报错能认出是哪个文件，所以只多 2 轮；认不出时要对半找，差得更多。
+
+反向检查：去掉「复用缓存时撤掉配置」、去掉「加载过的不删」，各有测试失败。测试 446 → 457。
+
+### 自查后修复（冲突、能力边界、写死的判断、可扩展性）
+
+| 方面 | 问题 | 修复 |
+|---|---|---|
+| 冲突 | 原配置固定改名为 `*.code-audit-original.*`，项目里本来就有这个文件会被覆盖（审核发现） | 已有就加序号，不覆盖任何文件 |
+| 冲突 | 只拿打包器证据核对 dead、dead-only-ref；test-only、dormant、pending 也在说「当前构建用不到」，构建加载了它们也不管，误判留在报告里 | 这 5 种都核对（`CLAIMS_UNUSED`），矛盾的判 unknown，只有要删的才写「不删」 |
+| 能力边界 | 证据、缓存本来是锦上添花，却能让 verify 整个失败：配置文件不在这个提交里时 instrument 抛错；缓存目录写不了时跑完基线才崩；构建中途被结束留下半个模块记录时解析报错 | 都改成提示后照常验证 |
+| 能力边界 | 套了配置后构建失败一律归咎于套配置；其实项目本身就构建不过时也会这么说 | 撤掉重跑后还失败，就明确说「不是打包器配置引起的」 |
+| 能力边界 | macOS 默认不区分大小写：`import './Foo.vue'` 能加载 `foo.vue`，模块 id 和 git 路径对不上，证据漏掉 | 模块 id 换成磁盘上的真实路径（`realpathSync.native`），不按平台写死 |
+| 写死 | 支持的打包器在 config.js 和适配器注册表里各写一份，加新打包器要改两处 | config 从注册表读，只在一处维护 |
+| 写死 | 构建报错提示里写死过滤 pnpm 的 `ELIFECYCLE` | 改成提到套过的配置文件的行排在前面，不认具体包管理器 |
+| 写死 | 证据文案写「生产构建」，构建命令不一定是生产模式 | 改成「构建」 |
+| 可扩展 | monorepo 里多个应用只能套一个配置 | `bundlerConfig` 可以写数组；有一个套不上就把套上的都撤掉 |
+| 可扩展 | 适配器的约定没写下来 | 写在 `src/verify/bundlers/index.js` 开头：instrument 返回 restore，每次构建往 outDir 写一个模块 id 数组 |
+
+能力边界里**没改、写进 README** 的：JS API 内联配置拿不到列表；Web Worker 的子构建不经过主配置的插件；按文件名配置的 lint、tsconfig 会让改名后的原配置过不了检查（走撤掉重跑）；只有 test-only 这类时不专门跑构建；缓存键不含环境变量。
+
+每处修复都反向检查过（改回去有测试失败）。两个项目用 `--fresh` 重跑，结论不变：finicr-web 742 个模块，误判对照的 aiAsset 判 unknown、1 轮通过，原有的 12 个 pending、2 个 test-only、2 个 dormant 都不矛盾；findip-portal-web 187 个模块、1 轮通过。测试 457 → 464。
+
+### 审核发现并修复（两个 P1）
+
+| 问题 | 修复 |
+|---|---|
+| scan、quarantine 只看源码目录里的加载：构建配置、脚本等目录外文件里的 `import.meta.glob`、拼接路径的 `import()` 不查，`findExternalRefs` 只认写明的路径、不认 glob。目录外 glob 加载的页面可能被判 dead，隔离后又被加载回来 | 目录外的代码文件（`outsideCode`，测试文件除外）一起找 glob、动态加载：glob 换算成 knip 入口，拼接路径的圈范围判 unknown；隔离时同样查。这些文件一律当成在用 |
+| 跟着上一条出现的：finicr-web 的 `cli/` 里有 `require(path.join(ROOT, 'package.json'))`，按原来的算法确定不了目录，会把所有候选判 unknown | `path.join` / `path.resolve` 各段算得出时，范围就是算出来的路径（`scope.paths`）；源码目录外的这类写法本来就由 findExternalRefs 判 external，不再当动态加载 |
+| 隔离出错撤回时，没被 git 跟踪的已有 README 被追加后不会恢复（`git reset` 管不到），人工写的内容丢失 | 追加前记下原内容，撤回时写回 |
+
+每处反向检查过（9 处改回去都有测试失败）。两个项目新旧版本 scan 对比：finicr-web 58 个、findip-portal-web 5 个候选，状态完全一致。测试 464 → 468。
+
+## 修已知问题、去掉定制化、打包（9d9566a）
 
 - 去掉代码注释、测试里取自具体项目的名字和例子，换成通用的（通用方案，代码不针对任何项目）
 - 已知问题全部处理完（见下面「已修复」）；剩下的两条是设计约束，不是 bug

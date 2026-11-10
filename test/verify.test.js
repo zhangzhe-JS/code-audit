@@ -12,6 +12,9 @@ import { runSteps } from '../src/verify/baseline.js'
 import { suggestScripts } from '../src/commands/verify.js'
 import { resolveConfig } from '../src/core/config.js'
 
+// 基线缓存写到临时目录：不碰用户的 ~/.cache，测试之间也不互相复用（子进程继承这个环境变量）
+process.env.CODE_AUDIT_CACHE_DIR = mkdtempSync(join(tmpdir(), 'code-audit-cache-'))
+
 const bin = fileURLToPath(new URL('../bin/code-audit.js', import.meta.url))
 const cli = (...args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8' })
 
@@ -161,8 +164,17 @@ test('runSteps：按 build、test 的顺序跑配置了的步骤，完整输出�
 // ---------- 配置、命令 ----------
 
 test('verify 配置：默认没有命令、超时 30 分钟；只写一项也行；写错时报错', () => {
-  assert.deepEqual(resolveConfig({}).verify, { build: null, test: null, timeoutSeconds: 1800 })
-  assert.deepEqual(resolveConfig({ verify: { build: 'npm run build' } }).verify, { build: 'npm run build', test: null, timeoutSeconds: 1800 })
+  const none = { bundler: null, bundlerConfig: null }
+  assert.deepEqual(resolveConfig({}).verify, { build: null, test: null, timeoutSeconds: 1800, ...none })
+  assert.deepEqual(resolveConfig({ verify: { build: 'npm run build' } }).verify, { build: 'npm run build', test: null, timeoutSeconds: 1800, ...none })
+  assert.equal(resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: 'web/vite.config.ts' } }).verify.bundlerConfig, 'web/vite.config.ts')
+  assert.throws(() => resolveConfig({ verify: { build: 'b', bundler: 'webpack' } }), /verify\.bundler 只支持 vite/)
+  assert.throws(() => resolveConfig({ verify: { bundler: 'vite' } }), /verify\.bundler 要有 verify\.build/)
+  assert.throws(() => resolveConfig({ verify: { build: 'b', bundlerConfig: 'vite.config.js' } }), /bundlerConfig 要和 verify\.bundler 一起写/)
+  assert.throws(() => resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: '../x.js' } }), /bundlerConfig 必须是相对仓库根目录的文件路径/)
+  assert.deepEqual(resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: ['a/vite.config.ts', 'b/vite.config.ts'] } }).verify.bundlerConfig, ['a/vite.config.ts', 'b/vite.config.ts'])
+  assert.throws(() => resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: [] } }), /不能为空、不能重复/)
+  assert.throws(() => resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: ['a.ts', 'a.ts'] } }), /不能为空、不能重复/)
   assert.throws(() => resolveConfig({ verify: { build: '' } }), /verify\.build 必须是命令字符串/)
   assert.throws(() => resolveConfig({ verify: { timeoutSeconds: 5 } }), /timeoutSeconds 必须是不小于 10 的整数/)
   assert.throws(() => resolveConfig({ verify: { lint: 'x' } }), /verify 里不认识的字段：lint/)

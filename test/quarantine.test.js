@@ -255,6 +255,19 @@ test('makeRecaptureCheck：人工确认过的动态加载不算', (t) => {
   assert.equal(makeRecaptureCheck({ files, readFile, config: reviewed })('src/a/_deprecated/x.js'), null)
 })
 
+test('makeRecaptureCheck：源码目录外的代码里的加载也查；测试文件里的不查', (t) => {
+  const repo = projectRepo()
+  t.after(() => repo.cleanup())
+  repo.write('build/load.js', "export const load = (n) => import('../src/utils/' + n)\n")
+  repo.write('tests/x.spec.js', "export const l = (n) => import('../src/other/' + n)\n")
+  repo.commit('目录外的加载')
+  const files = repo.run(['ls-files']).split('\n')
+  const readFile = (p) => readFileSync(join(repo.root, p), 'utf8')
+  const check = makeRecaptureCheck({ files, readFile, config: resolveConfig({ testEntries: ['tests/**/*.spec.js'] }) })
+  assert.match(check('src/utils/_deprecated/old.js'), /会被 build\/load\.js:1 的 import\('\.\.\/src\/utils\/' \+ n\) 重新加载/)
+  assert.equal(check('src/other/_deprecated/x.js'), null)
+})
+
 test('quarantine 配置：layout 只能是 nearby / central；就近隔离不写 dir、base；dirName 是一个目录名', () => {
   assert.deepEqual(resolveConfig({}).quarantine, { layout: 'nearby', dirName: '_deprecated', dir: null, base: null })
   assert.throws(() => resolveConfig({ quarantine: { layout: 'x' } }), /layout 只能是 nearby/)
@@ -373,4 +386,17 @@ test('applyPlan：写 README 时出错也整体撤回——已经新建的 READM
   assert.throws(() => applyPlan({ root: repo.root, plan, config: nearby, movedAt: '2026-11-09' }), /隔离没有完成，已撤回/)
   assert.equal(repo.run(['status', '--porcelain', '--untracked-files=all']), '')
   assert.equal(existsSync(join(repo.root, 'src/utils/chart/_deprecated')), false)
+})
+
+test('applyPlan：撤回时没被 git 跟踪的 README 写回原内容，不会丢', (t) => {
+  const repo = projectRepo()
+  t.after(() => repo.cleanup())
+  const plan = planFor(repo, dataFor(repo), nearby)
+  // 隔离目录里本来就有一份没提交的 README（人工写的）
+  const own = join(repo.root, 'src/utils/chart/_deprecated/README.md')
+  repo.write('src/utils/chart/_deprecated/README.md', '# 人工写的说明\n')
+  plan.readmes.push({ dir: 'src/zzz/nope', path: 'src/zzz/nope/README.md', exists: false, moves: plan.readmes[0].moves })
+  assert.throws(() => applyPlan({ root: repo.root, plan, config: nearby, movedAt: '2026-11-09' }), /隔离没有完成，已撤回/)
+  assert.equal(readFileSync(own, 'utf8'), '# 人工写的说明\n')
+  assert.equal(repo.run(['status', '--porcelain', '--untracked-files=all']), '?? src/utils/chart/_deprecated/README.md')
 })

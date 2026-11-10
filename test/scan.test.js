@@ -304,6 +304,34 @@ test('scan：构建配置里写着路径的判为 external；测试文件里写�
   assert.deepEqual(helper.refs, [])
 })
 
+test('scan：源码目录外的代码（构建配置、脚本）里的 glob、拼接路径的加载也算：圈到的不判死', (t) => {
+  const repo = sampleRepo()
+  const knipDir = fakeKnipDir()
+  t.after(() => {
+    repo.cleanup()
+    rmSync(knipDir, { recursive: true, force: true })
+  })
+  repo.write('build/pages.js', "export const pages = import.meta.glob('../src/pages/*.js')\nexport const load = (n) => import('../src/views/' + n)\n")
+  repo.write('cli/shared.js', "const pkg = require(path.join(ROOT, 'package.json'))\n")
+  repo.write('tests/loader.spec.js', "export const l = (n) => import('../src/dead/' + n)\n") // 测试文件里的不算
+  repo.write('src/pages/a.js', '')
+  repo.write('src/views/b.js', '')
+  repo.commit('目录外的加载')
+  const fake = fakeRun({ mainOnly: ['src/dead.js', 'src/views/b.js'], withTests: ['src/dead.js', 'src/views/b.js'] })
+  const config = resolveConfig({ entries: ['src/main.js'], testEntries: ['tests/**/*.spec.js'] })
+  const r = scan({ root: repo.root, project: 'p', config, knipDir, run: fake.run })
+
+  // glob 换算成入口交给 knip（和源码里的 glob 一样）
+  assert.ok(fake.calls[0].entry.includes('src/pages/*.js'))
+  assert.deepEqual(r.summary.globs.map((g) => g.from).sort(), ['build/pages.js', 'src/i18n/index.js'])
+  const byFile = Object.fromEntries(r.candidates.files.map((f) => [f.file, f]))
+  assert.equal(byFile['src/views/b.js'].status, 'unknown')
+  assert.deepEqual(byFile['src/views/b.js'].refs, [{ from: 'build/pages.js', line: 2, via: 'dynamic' }])
+  // path.join(ROOT, 'package.json') 算得出是哪个文件：不圈整个仓库，dead.js 照常判死，也不记警告
+  assert.equal(byFile['src/dead.js'].status, 'dead')
+  assert.doesNotMatch(r.summary.warnings.map((w) => w.detail).join('\n'), /确定不了目录/)
+})
+
 test('scan：在用的代码里注释掉的引用判为 dormant；候选、测试文件里的注释不算', (t) => {
   const repo = sampleRepo()
   const knipDir = fakeKnipDir()

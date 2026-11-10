@@ -71,6 +71,25 @@ test('确定不了目录时范围是整个仓库（wide），按固定的结尾�
   )
 })
 
+test('path.join / path.resolve 各段算得出时就是那几个路径，不圈整个仓库；有算不出的段照旧', () => {
+  const code = [
+    "require(path.join(ROOT, 'package.json'))",
+    "require(path.resolve(__dirname, '../src/a'))",
+    "import(path.join(process.cwd(), 'src/b.js'))",
+    "require(path.join(ROOT, name))",
+    'require(path.join(ROOT, `src/${x}.js`))'
+  ].join('\n')
+  const loads = find('cli/shared.js', code)
+  assert.deepEqual(loads.map((l) => l.scope.paths ?? null), [['package.json', 'cli/package.json'], ['src/a'], ['src/b.js'], null, null])
+  assert.deepEqual(loads.map((l) => l.scope.wide), [false, false, false, true, true])
+  const [, a] = loads
+  // 省略扩展名、目录的 index 都算；别的文件不算
+  assert.equal(inScope('src/a.vue', a.scope), true)
+  assert.equal(inScope('src/a/index.js', a.scope), true)
+  assert.equal(inScope('src/ab.js', a.scope), false)
+  assert.equal(inScope('src/a/b.js', a.scope), false)
+})
+
 test('require.context：默认含子目录、不限文件；false 不含子目录；正则里有括号', () => {
   const code = [
     "require.context('./modules')",

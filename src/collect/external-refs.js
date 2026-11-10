@@ -33,7 +33,7 @@ export const EXTERNAL_EXTENSIONS = Object.freeze([
 /** 锁文件很大，只有包名，不会写源码路径 */
 const LOCK_FILES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'])
 
-const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx']
+export const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx']
 const SNIPPET_MAX = 80
 
 /**
@@ -51,6 +51,26 @@ export function externalFiles({ all, sourceRoots, extensions, exclude }) {
     const inSource = sourceRoots.some((r) => f.startsWith(`${r}/`))
     const analyzed = inSource && extensions.some((e) => f.endsWith(e))
     return !analyzed
+  })
+}
+
+/**
+ * 源码目录外（或扩展名不在分析范围里）的代码文件：构建配置、脚本、别的目录下的组件等
+ * knip 不分析它们，但它们里面的 import.meta.glob、拼接路径的 import() / require() 照样会加载源码，
+ * scan 和 quarantine 都要把这些加载算进去
+ * @param {object} opts
+ * @param {string[]} opts.all          提交里的文件（可以是全部文件）
+ * @param {string[]} opts.sourceRoots
+ * @param {string[]} opts.extensions   knip 分析的扩展名
+ * @param {(path: string) => boolean} opts.exclude 不算的文件（测试文件）
+ * @returns {string[]}
+ */
+export function outsideCode({ all, sourceRoots, extensions, exclude }) {
+  const code = [...new Set([...JS_LIKE, ...extensions])]
+  return all.filter((f) => {
+    if (!code.some((e) => f.endsWith(e)) || exclude(f)) return false
+    const inSource = sourceRoots.some((r) => f.startsWith(`${r}/`))
+    return !(inSource && extensions.some((e) => f.endsWith(e)))
   })
 }
 
@@ -135,27 +155,42 @@ export function joinedPaths(code, from) {
   const out = []
   const text = code.replace(/process\.cwd\(\)/g, '__CWD__')
   for (const m of text.matchAll(/\bpath\.(?:join|resolve)\s*\(([^()]*)\)/g)) {
-    const args = m[1].split(',').map((a) => a.trim()).filter(Boolean)
-    if (args.length === 0) continue
-    const segs = []
-    let bases = ['']
-    let ok = true
-    args.forEach((a, i) => {
-      const lit = a.match(/^(["'`])([^"'`]*)\1$/)
-      if (lit) segs.push(lit[2])
-      else if (i === 0 && a === '__dirname') bases = [posix.dirname(from)]
-      else if (i === 0 && a === '__CWD__') bases = ['']
-      else if (i === 0 && /^[A-Za-z_$][\w$.]*$/.test(a)) bases = ['', posix.dirname(from)]
-      else ok = false
-    })
-    if (!ok || segs.length === 0) continue
-    const candidates = bases
-      .map((b) => posix.normalize(posix.join(b, ...segs.map((s) => s.replace(/^\//, '')))).replace(/\/+$/, ''))
-      .filter((p) => p !== '.' && !p.startsWith('../'))
+    const candidates = joinCandidates(m[1], from)
     // 换占位符不会增减换行：在替换后的文本里算的行号就是原文的行号
-    out.push({ line: lineAt(text, m.index), candidates })
+    if (candidates) out.push({ line: lineAt(text, m.index), candidates })
   }
   return out
+}
+
+/**
+ * 一处 path.join / path.resolve 调用（整段文本，如 path.join(ROOT, 'package.json')）拼出的路径；
+ * 不是这种调用、或有算不出来的段时返回 null
+ * @returns {string[]|null}
+ */
+export function joinedPathOf(callText, from) {
+  const m = callText.replace(/process\.cwd\(\)/g, '__CWD__').trim().match(/^path\.(?:join|resolve)\s*\(([^()]*)\)$/)
+  return m ? joinCandidates(m[1], from) : null
+}
+
+/** path.join 的参数 → 可能的路径（相对仓库根目录）；算不出来返回 null */
+function joinCandidates(argsText, from) {
+  const args = argsText.split(',').map((a) => a.trim()).filter(Boolean)
+  if (args.length === 0) return null
+  const segs = []
+  let bases = ['']
+  let ok = true
+  args.forEach((a, i) => {
+    const lit = a.match(/^(["'`])([^"'`]*)\1$/)
+    if (lit && !(lit[1] === '`' && lit[2].includes('${'))) segs.push(lit[2])
+    else if (i === 0 && a === '__dirname') bases = [posix.dirname(from)]
+    else if (i === 0 && a === '__CWD__') bases = ['']
+    else if (i === 0 && /^[A-Za-z_$][\w$.]*$/.test(a)) bases = ['', posix.dirname(from)]
+    else ok = false
+  })
+  if (!ok || segs.length === 0) return null
+  return bases
+    .map((b) => posix.normalize(posix.join(b, ...segs.map((s) => s.replace(/^\//, '')))).replace(/\/+$/, ''))
+    .filter((p) => p !== '.' && !p.startsWith('../'))
 }
 
 /** 第几行的内容，压缩空白、过长截断 */

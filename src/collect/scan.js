@@ -21,7 +21,7 @@ import { findGlobImports, globToRegExp } from './glob-imports.js'
 import { addCompilerDeps, buildKnipConfig, findKnip, readPluginNames, runKnip } from './knip.js'
 import { createSnapshot } from './snapshot.js'
 import { findDynamicLoads } from './dynamic-imports.js'
-import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs } from './external-refs.js'
+import { EXTERNAL_EXTENSIONS, externalFiles, findExternalRefs, outsideCode } from './external-refs.js'
 import { findCommentRefs } from './comment-refs.js'
 import { findImportRefs } from './path-refs.js'
 import { findBranchRefs } from './branch-refs.js'
@@ -113,7 +113,12 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
 
   // 2. import.meta.glob → 入口
   const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-  const { globs: globImports, warnings, unresolved: unresolvedGlobs } = findGlobImports({ files: contents, aliases: config.aliases })
+  // 源码目录外的代码（构建配置、脚本等）：knip 不分析，但里面的 glob、拼接路径的加载照样会加载源码，一起找。
+  // 这些文件当成在用的（看不出它们自己有没有人用，宁可少删）
+  const outside = outsideCode({ all: snap.list(['.']), sourceRoots: config.sourceRoots, extensions: config.extensions, exclude: (f) => testFiles.has(f) })
+    .map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+  const loaders = [...contents, ...outside]
+  const { globs: globImports, warnings, unresolved: unresolvedGlobs } = findGlobImports({ files: loaders, aliases: config.aliases })
   // 测试文件：在临时目录被改动（下面补 import）之前读出原样
   const testContents = [...testFiles].filter(byExt).map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
 
@@ -178,7 +183,9 @@ function scanSnapshot({ root, snap, project, config, knip, pluginNames, run }) {
 
   // 5. 规则层判定状态
   // 动态加载：人工确认过不加载本地源码的（配置 reviewedDynamicLoads）不圈文件，只在证据里注明
-  const allLoads = findDynamicLoads({ files: contents, aliases: config.aliases })
+  // 源码目录外的文件里，path.join 算得出路径的：就是写明了路径的引用，由下面的 findExternalRefs 判 external，不再当动态加载
+  const outsideSet = new Set(outside.map((f) => f.path))
+  const allLoads = findDynamicLoads({ files: loaders, aliases: config.aliases }).filter((l) => !(l.scope.paths && outsideSet.has(l.from)))
   const loads = allLoads.filter((l) => !isReviewed(l, config.reviewedDynamicLoads))
   const reviewedLoads = allLoads
     .filter((l) => isReviewed(l, config.reviewedDynamicLoads))

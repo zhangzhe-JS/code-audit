@@ -124,6 +124,7 @@ test('findExternalRefs：相对这个文件的路径、path.join / resolve 拼�
   })
   assert.deepEqual([...findExternalMaybe({ files, targets, found })].map(([k, v]) => [k, v.map((r) => r.line)]), [['src/old/x/legacy.js', [5]]])
   assert.deepEqual(joinedPaths("path.join(name, x + '.js')", 'a.js'), [])
+  assert.deepEqual(joinedPaths('path.join(ROOT, `src/${x}.js`)', 'a.js'), []) // 模板字符串里有变量：算不出
   // 相对这个文件所在目录的路径：路径里没有 src/，只能按文件目录解析
   const local = findExternalRefs({ files: [{ path: 'src/legacy/tool.cjs', content: "require('./widget.js')" }], targets: ['src/legacy/widget.js'] })
   assert.deepEqual([...local.keys()], ['src/legacy/widget.js'])

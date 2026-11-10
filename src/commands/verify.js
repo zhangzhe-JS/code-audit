@@ -15,7 +15,7 @@ import { assertOutsideRepo, pathExists, readJson, writeFileSafely } from '../cor
 import { MAX_ROUNDS, verifyReport } from '../verify/index.js'
 import { git } from '../history/git.js'
 import { createWorkspace } from '../verify/workspace.js'
-import { describe, runSteps } from '../verify/baseline.js'
+import { describe, prepareBaseline } from '../verify/baseline.js'
 import { tail } from '../verify/run-command.js'
 
 const USAGE = `用法：
@@ -27,17 +27,21 @@ const USAGE = `用法：
 - 带 --in：把 dead、dead-only-ref 实际删掉再跑，和基线比较。全部通过一般只要 2 轮；
   不通过时先从报错里认出是哪些文件，认不出再对半找（最多 ${MAX_ROUNDS} 轮）。
   删了会出问题的，状态改为 unknown，证据写上出了什么问题
+- 基线结果按提交、命令、依赖缓存起来，重跑时直接复用（试跑基线也会存）；加 --fresh 不用缓存
+- 配置了 verify.bundler 时，基线构建顺便记下打包器加载过的模块：静态分析说用不到、构建却加载了的，判 unknown，不删
 
 会执行项目自己的命令（构建脚本等）：只在系统临时目录里的拷贝上跑，依赖克隆一份，不碰原项目。
 
 选项：
   --root     仓库目录，默认当前目录
   --profile  项目配置文件（必填），要写 verify 的命令，如：
-               verify: { build: 'npm run build', test: 'npm test' }
+               verify: { build: 'npm run build', test: 'npm test', bundler: 'vite' }
              命令必须能无人值守跑完；超时默认 30 分钟，可以写 timeoutSeconds
+             bundler 可选（目前支持 vite），配置文件不在默认位置时写 bundlerConfig
   --in       history 输出的数据（data.json）；用数据里记录的提交
   --out      结果写到这个文件；不传就打印出来。不能写在被分析的仓库里，文件不能已存在
   --rev      试跑基线时用哪个提交，默认 HEAD（带 --in 时用数据里的提交）
+  --fresh    不复用缓存的基线，重跑一遍（构建受环境变量影响、或怀疑缓存不对时用）
   --keep     试跑基线时跑完不删临时目录（排查用），会打印路径
   -h, --help 显示帮助`
 
@@ -53,6 +57,7 @@ export async function run(argv) {
         in: { type: 'string' },
         out: { type: 'string' },
         keep: { type: 'boolean' },
+        fresh: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' }
       }
     }))
@@ -89,14 +94,23 @@ export async function run(argv) {
     for (const d of ws.deps) log(`  依赖 ${d.dir || '.'}/node_modules：${d.method === 'clone' ? '克隆（不占额外磁盘）' : '复制'}`)
 
     const logDir = join(dirname(ws.dir), 'logs')
-    const results = await runSteps({ cwd: ws.dir, verify: config.verify, logDir, log })
+    // 试跑就是要真跑一遍：不读缓存，跑通了照样存起来，接下来带 --in 时直接复用
+    const base = await prepareBaseline({ root, ws, verify: config.verify, useCache: false, logDir, log })
+    const results = base.results
+    if (config.verify.bundler) {
+      log(base.bundlerDropped
+        ? `没有打包器证据：${base.bundlerDropped}，已撤掉重跑`
+        : base.modules
+          ? `打包器（${config.verify.bundler}）记录了 ${base.builds} 次构建，加载了 ${base.modules.size} 个源码文件`
+          : '没拿到打包器的模块列表：构建没有经过套好的配置（构建命令用了别的配置文件？可以在 verify.bundlerConfig 里写上）')
+    }
 
     const failed = Object.entries(results).filter(([, r]) => !r.ok)
     for (const [step, r] of failed) {
       log(`\n${step} 的最后 30 行：\n${tail(r.output)}`)
     }
     if (failed.length === 0) {
-      log('\n基线正常：配置的命令都能在临时目录里跑通')
+      log('\n基线正常：配置的命令都能在临时目录里跑通（结果已缓存，接下来带 --in 验证时直接复用）')
     } else {
       log(`\n基线有 ${failed.length} 步没通过（${failed.map(([s, r]) => `${s} ${describe(r)}`).join('、')}）`)
       log('删文件以后对比时，基线本来就失败的步骤看不出删文件有没有影响。先确认命令写得对、能无人值守跑完')
@@ -124,10 +138,16 @@ async function verifyData(root, values) {
     }
     const started = Date.now()
     const log = (msg) => console.error(msg)
-    const { data, summary } = await verifyReport({ data: readJson(values.in), root, config, log })
+    const { data, summary } = await verifyReport({ data: readJson(values.in), root, config, log, useCache: !values.fresh })
     const json = `${JSON.stringify(data, null, 2)}\n`
 
     log(`\n验证了 ${summary.targets} 个文件，共 ${summary.rounds} 轮，用时 ${Math.round((Date.now() - started) / 60000)} 分钟`)
+    if (summary.baselineCachedAt) log('  基线复用了缓存')
+    if (summary.bundlerDropped) log(`  没有打包器证据：${summary.bundlerDropped}`)
+    if (summary.contradicted?.length > 0) {
+      log(`  构建加载过、和静态分析矛盾（状态改为 unknown）：${summary.contradicted.length} 个${summary.bundled.length > 0 ? `，其中 ${summary.bundled.length} 个要删的不删` : ''}`)
+      for (const f of summary.contradicted) log(`    - ${f}`)
+    }
     log(`  删掉后和基线一致：${summary.passed} 个`)
     if (summary.failed > 0) {
       log(`  删了会出问题（状态改为 unknown）：${summary.failed} 个`)

@@ -24,7 +24,9 @@ export function dynamicLoadRule(file, { loads, candidates }) {
       detail:
         `可能被 ${l.from}:${l.line} 动态加载：${l.expr}；` +
         (l.note ??
-          (l.scope.wide
+          (l.scope.paths
+            ? `路径是拼出来的，可能指 ${l.scope.paths.join(' 或 ')}（开头的变量不知道指哪里，几种都算）`
+            : l.scope.wide
             ? `路径的开头就是变量，确定不了目录，${narrowed(l.scope)}。人工确认它不加载本地源码后，可以写进配置 reviewedDynamicLoads`
             : '路径里有变量，无法确定是否用到')) +
         (candidates.has(l.from) ? `（${l.from} 本身也从入口走不到）` : '')

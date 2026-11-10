@@ -7,6 +7,7 @@
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { STATUSES, STATUS_LABELS } from './schema.js'
+import { BUNDLERS as BUNDLER_ADAPTERS } from '../verify/bundlers/index.js'
 
 /** 头注释支持的注释格式：block 是 JS 的 /** *\/，html 是 <!-- --> */
 export const COMMENT_STYLES = Object.freeze(['block', 'html'])
@@ -75,6 +76,11 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {string|null} build  构建命令，如 "npm run build"；必须能无人值守跑完（不能停下来等人输入）
  * @property {string|null} test   测试命令，如 "npm test"；不写就不跑测试
  * @property {number} timeoutSeconds 每条命令最多跑多久，超时算失败
+ * @property {string|null} bundler 打包器证据（取值见 src/verify/bundlers/ 里登记的适配器，目前有 vite）：
+ *   基线构建时记下打包器加载过的模块，静态分析说「当前构建用不到」、打包器却加载了的，判 unknown，不删。
+ *   同时能少走对半查找：这类文件不删，第一轮就更容易通过。null = 不启用（没有默认值：要知道项目用的是什么打包器）
+ * @property {string|string[]|null} bundlerConfig 打包器的配置文件，相对仓库根目录；monorepo 里有多个应用时写数组。
+ *   null = 按打包器自己的规则找一个（如 vite.config.js）
  */
 
 /** @type {Readonly<Config>} */
@@ -121,7 +127,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 动态加载默认都不放过：人工确认过的才写进来
   reviewedDynamicLoads: Object.freeze([]),
   // verify 的命令没有默认值；超时默认 30 分钟（构建前还可能跑 lint）
-  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800 }),
+  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800, bundler: null, bundlerConfig: null }),
   // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
   branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null }),
   // 隔离区：默认就近，放进文件所在目录下的 _deprecated
@@ -229,7 +235,7 @@ export function resolveConfig(overrides = {}) {
   }
 
   for (const k of Object.keys(config.verify)) {
-    if (!['build', 'test', 'timeoutSeconds'].includes(k)) errors.push(`verify 里不认识的字段：${k}（可用的字段：build、test、timeoutSeconds）`)
+    if (!VERIFY_KEYS.includes(k)) errors.push(`verify 里不认识的字段：${k}（可用的字段：${VERIFY_KEYS.join('、')}）`)
   }
   for (const k of ['build', 'test']) {
     const v = config.verify[k]
@@ -238,6 +244,17 @@ export function resolveConfig(overrides = {}) {
   if (!Number.isInteger(config.verify.timeoutSeconds) || config.verify.timeoutSeconds < 10) {
     errors.push(`verify.timeoutSeconds 必须是不小于 10 的整数（秒）：${config.verify.timeoutSeconds}`)
   }
+  if (config.verify.bundler !== null && !BUNDLERS.includes(config.verify.bundler)) {
+    errors.push(`verify.bundler 只支持 ${BUNDLERS.join('、')}，不启用就不要写：${config.verify.bundler}`)
+  }
+  const bc = config.verify.bundlerConfig
+  const bcList = Array.isArray(bc) ? bc : bc === null ? [] : [bc]
+  if (Array.isArray(bc) && (bc.length === 0 || new Set(bc).size !== bc.length)) errors.push('verify.bundlerConfig 写数组时不能为空、不能重复')
+  for (const f of bcList) {
+    if (!isRelativeDir(f) || f.split('/').includes('..')) errors.push(`verify.bundlerConfig 必须是相对仓库根目录的文件路径（多个写数组），如 "vite.config.ts"：${f}`)
+  }
+  if (bc !== null && config.verify.bundler === null) errors.push('verify.bundlerConfig 要和 verify.bundler 一起写')
+  if (config.verify.bundler !== null && !config.verify.build) errors.push('verify.bundler 要有 verify.build：模块列表是从构建里拿的')
 
   for (const k of Object.keys(config.branches)) {
     if (!['ignore', 'maxAgeDays'].includes(k)) errors.push(`branches 里不认识的字段：${k}（可用的字段：ignore、maxAgeDays）`)
@@ -282,7 +299,10 @@ export function resolveConfig(overrides = {}) {
     aliases: Object.freeze({ ...config.aliases }),
     scanIgnore: Object.freeze([...config.scanIgnore]),
     reviewedDynamicLoads: Object.freeze(config.reviewedDynamicLoads.map((r) => Object.freeze({ ...r }))),
-    verify: Object.freeze({ ...config.verify }),
+    verify: Object.freeze({
+      ...config.verify,
+      bundlerConfig: Array.isArray(config.verify.bundlerConfig) ? Object.freeze([...config.verify.bundlerConfig]) : config.verify.bundlerConfig
+    }),
     branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) }),
     quarantine: Object.freeze({ ...config.quarantine })
   })
@@ -303,6 +323,11 @@ export async function loadProfile(file) {
 export function isValidHashLength(n) {
   return Number.isInteger(n) && n >= 4 && n <= 40
 }
+
+/** verify 里可以写的字段 */
+const VERIFY_KEYS = Object.freeze(['build', 'test', 'timeoutSeconds', 'bundler', 'bundlerConfig'])
+/** 支持的打包器：取自 src/verify/bundlers/ 里登记的适配器，只在那里维护 */
+export const BUNDLERS = Object.freeze(Object.keys(BUNDLER_ADAPTERS))
 
 /** 按键合并的配置项 */
 const MERGED_KEYS = Object.freeze(['headerStyles', 'statusLabels', 'columnTitles', 'verify', 'branches', 'quarantine'])

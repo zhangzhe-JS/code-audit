@@ -11,6 +11,9 @@ import { resolveConfig } from '../src/core/config.js'
 import { SCHEMA_VERSION, validate } from '../src/core/schema.js'
 import { TOOL } from '../src/core/tool.js'
 
+// 基线缓存写到临时目录：不碰用户的 ~/.cache，测试之间也不互相复用（子进程继承这个环境变量）
+process.env.CODE_AUDIT_CACHE_DIR = mkdtempSync(join(tmpdir(), 'code-audit-cache-'))
+
 const bin = fileURLToPath(new URL('../bin/code-audit.js', import.meta.url))
 const cli = (...args) => spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8' })
 

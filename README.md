@@ -156,6 +156,10 @@ node bin/code-audit.js scan --root ../my-app --profile profiles/my-app.js --out 
 
 scan 先找出「从入口走不到」的文件，再由规则层（`src/rules/`）判定状态，写进候选清单；history 只补历史，不改状态。分析的是提交里的代码（默认 HEAD，`--rev` 可指定），工作区没提交的改动不算：文件导出到系统临时目录再分析，不碰目标仓库的工作区和暂存区。提交号写进候选清单的 `rev`，history 默认查同一个提交，两边看到的是同一份代码。没有候选时输出空的 `files`，照样能交给 history、report。代码里的 `import.meta.glob` 会自动换算成入口；参数不是字符串的 glob 换算不了，会在输出里提示。
 
+源码目录外的代码（构建配置、脚本、别的目录下的组件）knip 不分析，但里面的 `import.meta.glob`、拼接路径的 `import()` / `require()` 照样会加载源码，也一并找出来，处理方式和源码里的一样。这些文件本身有没有人用看不出来，一律当成在用的（宁可少删）。`path.join(ROOT, 'x')`、`path.resolve(__dirname, 'x')` 这类各段都算得出的写法，只圈算出来的那几个路径，不圈整个仓库。测试文件里的不算。
+
+能力边界：脚本里用 fs 的 glob 库（`globSync('src/**/*.vue')`）、插件配置里写的目录（如 `dirs: 'src/pages'`）不认，这类加载要靠打包器证据（verify）或人工确认。
+
 路径里有变量的动态加载（`import('./views/' + name)`、`require.context('./modules')` 等），按路径里固定的开头和结尾圈出可能加载的文件，落在范围里的候选判为 `unknown`，引用里记下加载的位置。路径开头就是变量（如 `import(path)`、`import(name + '.vue')`）时确定不了目录，范围是整个仓库，只按路径里固定的结尾缩小，圈到的都判 `unknown`。人工确认它不加载本地源码后，写进配置：
 
 ```js
@@ -237,7 +241,10 @@ node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 **5. 试跑基线**（verify 第一部分）：在 profile 里写上构建、测试命令，确认它们能在临时目录里无人值守跑通：
 
 ```js
-verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800 }  // 命令没有默认值；不能停下来等人输入
+verify: {
+  build: 'npm run build', test: 'npm test', timeoutSeconds: 1800,  // 命令没有默认值；不能停下来等人输入
+  bundler: 'vite'                                                  // 可选：打包器证据（目前支持 vite）
+}
 ```
 
 ```bash
@@ -245,6 +252,21 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js [--k
 ```
 
 代码从提交里导出到系统临时目录，`node_modules` 克隆一份（macOS 上几秒、不占额外磁盘），构建、测试都在那里跑，原项目不写任何东西。`--keep` 保留临时目录和完整日志，排查用。
+
+基线结果会缓存起来（`~/.cache/code-audit`，按提交、命令、依赖状态区分）：试跑通过后，接下来的实删验证、以及之后的重跑都直接复用，不再跑一遍。构建受环境变量影响、或怀疑缓存不对时加 `--fresh`。
+
+**打包器证据**（`bundler: 'vite'`）：基线构建时顺便记下打包器实际加载过的模块，不多跑构建。做法是在临时目录里给 `vite.config.*` 套一层、追加一个只记录模块的插件（项目文件不改，构建产物不变）。配置文件不在默认位置时写 `bundlerConfig`，monorepo 里多个应用写数组。用法只有一个方向：
+- 静态分析说「当前构建用不到」（`dead`、`dead-only-ref`、`test-only`、`dormant`、`pending`），打包器却加载了 → 判 `unknown`（静态分析漏看了引用，如 glob、插件、别名），要删的不删。这类文件删了多半构建失败，提前拿掉就不用多跑几轮去找
+- 打包器没加载的不拿来判死：测试、脚本、别的构建模式可能在用
+- 证据和缓存都是锦上添花，出问题只提示、照常验证：套不上（配置文件不在这个提交里）、套了后构建失败（如构建前的 lint 检查到了生成的文件，会自动撤掉重跑；撤掉还失败就说明是项目本身的问题）、缓存目录写不了
+
+能力边界：
+- 只看得到经过套好的配置的构建：构建命令用 JS API 传内联配置、或用了没写进 `bundlerConfig` 的配置文件，拿不到列表（会提示）
+- Vite 给 Web Worker 单独打的包不经过主配置的插件，worker 里加载的文件不在列表里
+- lint 规则、tsconfig 按文件名 `vite.config.ts` 配置的项目，改名后的原配置可能不过检查，会走「撤掉重跑」，这次就没有证据
+- 只在有要删的文件（`dead`、`dead-only-ref`）时才跑；只有 `test-only` 这类时不会专门为它跑构建
+- 缓存键不含环境变量；构建受环境变量影响时加 `--fresh`
+- 目前只有 Vite 适配器；加别的打包器照 `src/verify/bundlers/index.js` 里写的约定写一个适配器，登记进去就行，配置校验自动认
 
 **6. 实删验证**：把 `dead`、`dead-only-ref` 实际删掉，跑构建、测试，和基线比较：
 
@@ -255,7 +277,7 @@ node bin/code-audit.js report --profile profiles/my-app.js --in reports/my-app/v
 
 - 只看新增的问题：基线本来就失败的测试、本来就有的警告不算。基线本来就有失败时，还会比退出码、通过的用例数，测试整个崩了也能发现
 - 完整输出写进日志（不截断）；比较用整个输出里的关键行（失败、警告、通过、汇总、报错），输出再长也不漏
-- 全部删掉没问题，一般 2 轮就结束；有问题时先从报错里认出是哪些文件，认不出再对半找（最多 40 轮）
+- 全部删掉没问题，一般「基线 + 1 轮」就结束（基线有缓存时只有 1 轮）；有问题时先从报错里认出是哪些文件，认不出再对半找（最多 40 轮）
 - 有 import 关系的候选绑在一起删（引用方和被引用的），不会冤枉被引用的
 - 删了会出问题的，状态改为 `unknown`，证据写上出了什么问题；新增的构建警告列出来给人看，不算失败
 
@@ -268,11 +290,11 @@ node bin/code-audit.js quarantine --root ../my-app --profile profiles/my-app.js 
 
 - 默认**就近隔离**：放进文件所在目录下的 `_deprecated`（`src/a/b.js` → `src/a/_deprecated/b.js`），每个隔离目录一份 README；lint 用一条 `**/_deprecated/**` 就能排除。
   也可以集中隔离：`quarantine: { layout: 'central', dir: 'src/_deprecated', base: 'src' }`（子目录结构不变）
-- 挪过去以后会被 `import.meta.glob`、`require.context` 等重新加载的位置不放（比如 `views/**` 下），计划里写明是哪一处
+- 挪过去以后会被 `import.meta.glob`、`require.context` 等重新加载的位置不放（比如 `views/**` 下），计划里写明是哪一处；源码目录外的代码（构建配置、脚本）里写的加载也查
 - `--apply` 前检查：工作区干净、当前提交就是分析的提交
 - **不建分支、不提交**，只在工作区里做好隔离，最后列出改了什么，提交交给开发人员：移动用 `git mv`（改名已暂存），头注释、修正相对路径（优先改成别名）、隔离目录的 README 不暂存。
   建议先提交暂存好的改名，再提交其余改动，文件历史才接得上
-- 任何一步出错都整体撤回，目标项目回到执行前的样子
+- 任何一步出错都整体撤回，目标项目回到执行前的样子：已跟踪的文件回到 HEAD，新建的 README 删掉，原来就有的 README（包括没提交的）写回原内容
 - lint 配置不自动改，计划里列出要手动加的那一行
 
 ---
@@ -321,4 +343,5 @@ git status --short       # 确认列表里没有上面这些目录
 | M5 | verify 模块 |
 | M6 | 接入第二个项目（Vue3 + TS） |
 | M7 | quarantine、打包成 tgz（0.1.0） |
-| 以后 | 导出维度（含 internal）、接口维度、是否接入大模型分析 |
+| M8 | verify 提速：打包器证据（vite）、基线缓存 |
+| 以后 | 导出维度（含 internal）、接口维度、webpack 适配器、是否接入大模型分析 |
