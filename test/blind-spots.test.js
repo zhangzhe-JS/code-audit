@@ -35,6 +35,25 @@ test('findComponentVarUses：:is / v-bind:is 是变量、resolveComponent 参数
   ])
 })
 
+test('findComponentVarUses：router-view 插槽给的 Component 是组件对象，不记；插槽外、别的名字照常记', () => {
+  const vue = [
+    '<template>',
+    '  <router-view v-slot="{ Component, route }">',
+    '    <keep-alive><component :is="Component" :key="route.path" /></keep-alive>',
+    '    <component :is="icon" />',
+    '  </router-view>',
+    '  <RouterView #default="{ Component: Page }"><component :is="Page" /></RouterView>',
+    '  <component :is="Component" />',
+    '  <router-view v-slot="{ route }"><component :is="Component" /></router-view>',
+    '</template>'
+  ].join('\n')
+  assert.deepEqual(findComponentVarUses([{ path: 'src/A.vue', content: vue }]).map((u) => [u.line, u.expr]), [
+    [4, ':is="icon"'],
+    [7, ':is="Component"'],
+    [8, ':is="Component"']
+  ])
+})
+
 // ---------- ② 同名标签 ----------
 
 test('componentName：从路径推组件名', () => {

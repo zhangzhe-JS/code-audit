@@ -173,9 +173,11 @@ export function findComponentVarUses(files) {
   for (const { path, content } of files) {
     if (!path.endsWith('.vue')) continue
     const template = templateOnly(content)
+    const routeSlots = routerViewSlots(template)
     for (const m of template.matchAll(/(?::|v-bind:)is\s*=\s*(["'])([\s\S]*?)\1/g)) {
       const value = m[2].trim()
       if (/^(["'`])[^"'`]*\1$/.test(value)) continue // 写死的字符串
+      if (routeSlots.some((r) => r.names.has(value) && m.index > r.start && m.index < r.end)) continue // 路由给的组件对象
       out.push({ from: path, line: lineOf(template, m.index), expr: shortExpr(m[0]) })
     }
     const code = codeOf(path, content)
@@ -183,6 +185,40 @@ export function findComponentVarUses(files) {
       if (/^(["'`])[^"'`]*\1$/.test(m[1])) continue
       out.push({ from: path, line: lineOf(code, m.index), expr: shortExpr(m[0]) })
     }
+  }
+  return out
+}
+
+/**
+ * <router-view v-slot="{ Component }"> 里解构出的 Component 是路由匹配到的组件对象，不是组件名，
+ * 不会按名字去找全局组件。返回每个这样的插槽：解构出的名字（含改名 { Component: C }）和标签内的范围
+ * @param {string} template
+ * @returns {{names: Set<string>, start: number, end: number}[]}
+ */
+function routerViewSlots(template) {
+  const out = []
+  const open = /<(router-view|RouterView)\b([^>]*?)>/g
+  for (const m of template.matchAll(open)) {
+    if (m[2].endsWith('/')) continue
+    const slot = m[2].match(/(?:v-slot(?::default)?|#default)\s*=\s*(["'])\s*\{([\s\S]*?)\}\s*\1/)
+    if (!slot) continue
+    const names = new Set()
+    for (const part of slot[2].split(',')) {
+      const [key, alias] = part.split(':').map((x) => x.trim())
+      if (key === 'Component') names.add(alias || key)
+    }
+    if (names.size === 0) continue
+    const start = m.index + m[0].length
+    const tag = new RegExp(`<(/?)${m[1]}\\b[^>]*?(/?)>`, 'g')
+    tag.lastIndex = start
+    let depth = 1
+    let end = template.length
+    for (let t; (t = tag.exec(template));) {
+      if (t[2]) continue
+      depth += t[1] ? -1 : 1
+      if (depth === 0) { end = t.index; break }
+    }
+    out.push({ names, start, end })
   }
   return out
 }
