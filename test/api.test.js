@@ -784,6 +784,99 @@ test('scanApi 菜单归属：按名字追、共享组件、全局停住、Vuex �
   }
 })
 
+test('scanApi 菜单归属按名字追到底：工具文件里别的函数、多层汇总、命名空间导入、模块顶层代码、页面导出的函数、JSX、导入后原样导出、看不出用法时按整个文件', () => {
+  const repo = createRepo()
+  try {
+    repo.write('package.json', JSON.stringify({ name: 'n', type: 'module', dependencies: { vue: '3.0.0', react: '18.0.0', '@x/login': '1.0.0' } }))
+    const pages = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'P2']
+    const ext = (p) => (p === 'K' || p === 'O' ? 'jsx' : 'vue')
+    repo.write('src/main.js', `export const routes = [${pages.map((p) => `() => import('./views/${p}.${ext(p)}')`).join(', ')}]\n`)
+    repo.write('src/http.js', 'export const get = (u) => fetch(u)\n')
+    repo.write('src/api.js', [
+      "import { get } from './http.js'",
+      "export const roles = () => get('/roles')",
+      "export const deep = () => get('/deep')",
+      "export const nsOnly = () => get('/ns')",
+      "export const boot = () => get('/boot')",
+      "export const pageFn = () => get('/page-fn')",
+      "export const jsx = () => get('/jsx')",
+      "export const again = () => get('/again')",
+      "export const unseen = () => get('/unseen')",
+      "export const setup = () => get('/setup')",
+      "export const twice = () => get('/twice')",
+      "export const user = () => get('/user')"
+    ].join('\n'))
+    // 工具文件：loadRoles 调接口，fmt 不调；B 只用 fmt
+    repo.write('src/utils/perm.js', "import { roles } from '../api.js'\nexport const loadRoles = () => roles()\nexport const fmt = (x) => String(x)\n")
+    repo.write('src/views/A.vue', "<template><i /></template>\n<script setup>\nimport { loadRoles } from '../utils/perm.js'\nloadRoles()\n</script>\n")
+    repo.write('src/views/B.vue', "<template><i /></template>\n<script setup>\nimport { fmt } from '../utils/perm.js'\nfmt(1)\n</script>\n")
+    // 多层：api → service → 汇总导出的 hooks → 组件 → 页面 C；hooks 里别的函数给 D 用
+    repo.write('src/service/deep.js', "import { deep } from '../api.js'\nexport function useDeep() { return deep() }\nexport function useOther() { return 1 }\n")
+    repo.write('src/hooks/index.js', "export * from '../service/deep.js'\n")
+    repo.write('src/components/DeepBox.vue', "<template><i /></template>\n<script setup>\nimport { useDeep } from '../hooks/index.js'\nuseDeep()\n</script>\n")
+    repo.write('src/views/C.vue', "<template><DeepBox /></template>\n<script setup>\nimport DeepBox from '../components/DeepBox.vue'\n</script>\n")
+    repo.write('src/views/D.vue', "<template><i /></template>\n<script setup>\nimport { useOther } from '../hooks/index.js'\nuseOther()\n</script>\n")
+    // 命名空间导入：E 用 svc.nsOnly，F 只用 svc.fmt2
+    repo.write('src/svc.js', "import { nsOnly } from './api.js'\nexport const callNs = () => nsOnly()\nexport const fmt2 = () => 2\n")
+    repo.write('src/views/E.vue', "<template><i /></template>\n<script setup>\nimport * as svc from '../svc.js'\nsvc.callNs()\n</script>\n")
+    repo.write('src/views/F.vue', "<template><i /></template>\n<script setup>\nimport * as svc from '../svc.js'\nsvc.fmt2()\n</script>\n")
+    // 模块顶层代码：cache.js 加载时就调接口，G 只用了里面别的名字也算
+    repo.write('src/cache.js', "import { boot } from './api.js'\nexport const data = boot()\nexport const other = 1\n")
+    repo.write('src/views/G.vue', "<template><i /></template>\n<script setup>\nimport { other } from '../cache.js'\nconsole.log(other)\n</script>\n")
+    // 页面 H（选项式）导出的函数被页面 I 用：组件本身没用它，不算 H
+    repo.write('src/views/H.vue', "<template><i /></template>\n<script>\nimport { pageFn } from '../api.js'\nexport function helper() { return pageFn() }\nexport default { name: 'H' }\n</script>\n")
+    repo.write('src/views/I.vue', "<template><i /></template>\n<script setup>\nimport { helper } from './H.vue'\nhelper()\n</script>\n")
+    // JSX：Panel 里写 <RoleTable />，K 用 Panel；O 用同一个文件里的 Plain（看不到 JSX 用法就会按整个文件摊到 O）
+    repo.write('src/components/RoleTable.jsx', "import { jsx } from '../api.js'\nexport default function RoleTable() { jsx(); return null }\n")
+    repo.write('src/components/Panel.jsx', "import RoleTable from './RoleTable.jsx'\nexport function Panel() { return <div><RoleTable /></div> }\nexport function Plain() { return null }\n")
+    repo.write('src/views/K.jsx', "import { Panel } from '../components/Panel.jsx'\nexport default function K() { return <Panel /> }\n")
+    repo.write('src/views/O.jsx', "import { Plain } from '../components/Panel.jsx'\nexport default function O() { return <Plain /> }\n")
+    // 导入后原样导出：L 从 relay 引入
+    repo.write('src/relay.js', "import { again } from './api.js'\nexport { again }\nexport const unrelated = 1\n")
+    repo.write('src/views/L.vue', "<template><i /></template>\n<script setup>\nimport { again } from '../relay.js'\nagain()\n</script>\n")
+    repo.write('src/views/N.vue', "<template><i /></template>\n<script setup>\nimport { unrelated } from '../relay.js'\nconsole.log(unrelated)\n</script>\n")
+    // <script setup> 里的函数只在模板里用：算组件本身
+    repo.write('src/components/SetupBtn.vue', "<template><button @click=\"go\" /></template>\n<script setup>\nimport { setup } from '../api.js'\nconst go = () => setup()\n</script>\n")
+    repo.write('src/views/P.vue', "<template><SetupBtn /></template>\n<script setup>\nimport SetupBtn from '../components/SetupBtn.vue'\n</script>\n")
+    // 看不出用法（只 import 没看到用到）：按整个文件算，M 用了 loose 里别的名字也算（偏保守）
+    repo.write('src/loose.js', "import { unseen } from './api.js'\nexport const x = 1\n")
+    repo.write('src/views/M.vue', "<template><i /></template>\n<script setup>\nimport { x } from '../loose.js'\nconsole.log(x)\n</script>\n")
+    repo.write('src/views/J.vue', '<template><i /></template>\n')
+    // 同一个文件引入两次（命名空间 + 具名）：两个本地名都要看
+    repo.write('src/twice.js', "import { twice } from './api.js'\nexport const callTwice = () => twice()\nexport const t2 = 1\n")
+    repo.write('src/views/Q.vue', "<template><i /></template>\n<script setup>\nimport * as tw from '../twice.js'\nimport { callTwice } from '../twice.js'\nconsole.log(tw.t2)\ncallTwice()\n</script>\n")
+    // 全局文件里的函数被页面直接用：碰到全局文件就停，归到全局
+    repo.write('src/layout/user.js', "import { user } from '../api.js'\nexport const loadUser = () => user()\n")
+    repo.write('src/views/R.vue', "<template><i /></template>\n<script setup>\nimport { loadUser } from '../layout/user.js'\nloadUser()\n</script>\n")
+    // SDK：从引用 SDK 功能的顶层名字出发，S 用的是同一个文件里别的函数
+    repo.write('src/auth.js', "import { createAuth } from '@x/login'\nexport const login = () => createAuth().open()\nexport const noop = () => 1\n")
+    repo.write('src/views/S.vue', "<template><i /></template>\n<script setup>\nimport { noop } from '../auth.js'\nnoop()\n</script>\n")
+    repo.write('src/views/P2.vue', "<template><i /></template>\n<script setup>\nimport { login } from '../auth.js'\nlogin()\n</script>\n")
+    repo.commit('i')
+    const config = resolveConfig({
+      entries: ['src/main.js'],
+      menus: [...pages.map((p) => ({ name: p, files: [`src/views/${p}.${ext(p)}`] })), { name: '全局', global: true, files: ['src/main.js', 'src/layout/**'] }],
+      api: { version: 1, calls: [{ call: 'get(url)', method: 'GET' }], sdk: [{ method: 'POST', path: '/login', package: '@x/login', via: ['createAuth'] }] }
+    })
+    const r = scanApi({ root: repo.root, project: 'n', config })
+    const menus = Object.fromEntries(r.endpoints.map((e) => [e.key, e.menus]))
+    assert.deepEqual(menus['GET /roles'], ['A'], '工具文件里别的函数（fmt）的使用方 B 不算')
+    assert.deepEqual(menus['GET /deep'], ['C'], '多层汇总导出：D 用的是 hooks 里别的函数')
+    assert.deepEqual(menus['GET /ns'], ['E'], '命名空间导入按成员：F 只用了 svc.fmt2')
+    assert.deepEqual(menus['GET /boot'], ['G'], '模块顶层代码：加载 cache.js 就会运行')
+    assert.deepEqual(menus['GET /page-fn'], ['I'], '页面导出的函数被别的页面用：算用的页面，不算组件本身没用它的 H')
+    assert.deepEqual(menus['GET /jsx'], ['K'], 'JSX 标签：O 用的是同一个文件里别的组件')
+    assert.deepEqual(menus['GET /again'], ['L'], '导入后原样导出：N 用的是 relay 里别的名字')
+    assert.deepEqual(menus['GET /setup'], ['P'], '<script setup> 里只在模板用的函数')
+    assert.deepEqual(menus['GET /twice'], ['Q'], '同一个文件引入两次，两个本地名都看')
+    assert.deepEqual(menus['GET /user'], ['全局'], '全局文件：碰到就停，不再往上')
+    assert.deepEqual(menus['POST /login'], ['P2'], 'SDK：S 用的是同一个文件里别的函数')
+    assert.deepEqual(menus['GET /unseen'], ['M'], '看不出用法时按整个文件（偏保守）')
+  } finally {
+    repo.cleanup()
+  }
+})
+
 test('createMenuFinder：引用链断了时未归属；配置校验', () => {
   assert.throws(() => resolveConfig({ menus: [{ name: 'A', files: [] }] }), /files 必须是/)
   assert.throws(() => resolveConfig({ menus: [{ name: 'A', files: ['a'] }, { name: 'A', files: ['b'] }] }), /name 重复/)

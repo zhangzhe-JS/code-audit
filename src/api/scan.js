@@ -24,7 +24,7 @@ import { buildLookup, resolveSpec } from '../collect/path-refs.js'
 import { compileCalls } from './rules.js'
 import { extractFile, loadParser, MODULE, TEMPLATE } from './extract.js'
 import { endpointKey, isExternalPath, mayHit } from './normalize.js'
-import { createMenuFinder, startFiles } from './menus.js'
+import { createMenuFinder } from './menus.js'
 import { findGlobalComponents, findTagUses } from '../collect/global-components.js'
 
 export const API_SCHEMA_VERSION = 1
@@ -190,13 +190,13 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   list = list.map((ep) => guardDeadEndpoint(ep, list, coverage))
   // 菜单归属：配置了 menus 才算；在用的接口从在用的定义（SDK 接口从引用 SDK 功能的文件）往上找
   if (config.menus.length > 0) {
-    const byPath = new Map(parsed.map((p) => [p.path, p]))
     const findMenus = createMenuFinder({ parsed, unreachable, aliases: config.aliases, menus: config.menus, callers, tagUses })
     list = list.map((ep) => {
       if (ep.status !== 'live') return ep
       const names = new Set()
-      for (const d of ep.definitions.filter((x) => x.state === 'live')) for (const m of findMenus(startFiles(d, callers, byPath), d).menus) names.add(m)
-      if (ep.sdk?.refs?.length) for (const m of findMenus([...new Set(ep.sdk.refs.map((r) => r.from))]).menus) names.add(m)
+      for (const d of ep.definitions.filter((x) => x.state === 'live')) for (const m of findMenus(null, d).menus) names.add(m)
+      // SDK：从引用 SDK 功能的文件里用到它的顶层名字出发
+      if (ep.sdk?.refs?.length) for (const m of findMenus(ep.sdk.refs.flatMap((r) => (r.by?.length ? r.by.map((o) => [r.from, o]) : [r.from]))).menus) names.add(m)
       const ordered = config.menus.map((m) => m.name).filter((n) => names.has(n))
       return { ...ep, menus: ordered }
     })
@@ -362,7 +362,12 @@ export function findCallers({ parsed, unreachable, aliases, onlyUnreachable = fa
         for (const [file, local] of defs) {
           const key = `${file}#${local}`
           const list = result.get(key) ?? []
-          if (!list.some((c) => c.from === p.path)) list.push({ from: p.path, name: s.imported === '*' ? `* as ${s.local}` : s.imported })
+          // locals：在引用方里叫什么（命名空间导入写成 ns.*），菜单归属按它找引用方里哪些代码在用
+          const localName = s.imported === '*' ? `${s.local}.*` : s.local
+          const hit = list.find((c) => c.from === p.path)
+          if (hit) {
+            if (!hit.locals.includes(localName)) hit.locals.push(localName)
+          } else list.push({ from: p.path, name: s.imported === '*' ? `* as ${s.local}` : s.imported, locals: [localName] })
           result.set(key, list)
         }
       }

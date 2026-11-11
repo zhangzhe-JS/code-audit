@@ -71,11 +71,12 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   const lines = lineStarts(code)
   const lineOf = (pos) => upperBound(lines, pos)
   // importUses：导入的名字（本地名）被哪些顶层名字引用（SDK 的功能有没有被在用的代码引用）
+  // importWhole：导入的名字整个被用到（不是 x.成员 的写法，如传参、x[key]），菜单归属看命名空间导入用的是哪些成员时用
   // dynamicImports：写死路径的 import('...')（异步组件等），菜单归属用来连引用
   // storeUses：用到的 Vuex 命名空间（dispatch('ns/x')、mapActions('ns') 等）；storeModules：这个文件里注册的 Vuex 模块（modules: { ns: 模块 }）
   // storeActionUses：用到的具体 action（ns/action）；storeActions：这个文件里的 Vuex actions 各自引用了哪些导入的名字
   // declLines：顶层名字声明在第几行（导出维度的报告用）；reexports 里也记下行号
-  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
+  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
@@ -231,10 +232,10 @@ function hasSideEffects(init) {
 
 const FUNCTIONS = new Set(['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'])
 
-function addUse(result, local, owner) {
-  const set = result.importUses.get(local) ?? new Set()
+function addUse(result, local, owner, field = 'importUses') {
+  const set = result[field].get(local) ?? new Set()
   set.add(owner)
-  result.importUses.set(local, set)
+  result[field].set(local, set)
 }
 
 function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys }) {
@@ -245,6 +246,8 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
     if (owners.length === 0) continue
     // 引用导入的名字时算在声明的名字上：const x = sdkFn() 只是创建，x 没人用就等于没用
     const useOwners = owners.length > 1 ? owners.filter((o) => o !== MODULE) : owners
+    // loadTime：声明的同时执行了代码的名字（const data = load()），菜单归属里导入名用在这里时，文件被加载就会运行
+    if (owners.length > 1 && owners.includes(MODULE)) for (const o of useOwners) result.loadTime.add(o)
     const refs = new Set()
     const consumed = new Set()
     // 作用域链：地址常先赋给局部常量再传进请求（const url = `...`），按真实的作用域查找，内层同名的会遮住外层。
@@ -256,9 +259,27 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
       if (n.type === 'Identifier') {
         if (isReference(n, parent, key) && !shadowed(n.name)) {
           if (topNames.has(n.name)) refs.add(n.name)
+          else if (importLocals.has(n.name)) {
+            const asObject = parent?.type === 'MemberExpression' && key === 'object' && !parent.computed
+            for (const o of useOwners) {
+              addUse(result, n.name, o)
+              if (!asObject) addUse(result, n.name, o, 'importWhole')
+            }
+          }
+        }
+        return
+      }
+      // JSX 标签：<OrderTable />、<Ns.Table />（React 等）
+      if (n.type === 'JSXIdentifier') {
+        const tag = (parent?.type === 'JSXOpeningElement' && key === 'name') || (parent?.type === 'JSXMemberExpression' && key === 'object')
+        if (tag && !shadowed(n.name)) {
+          if (topNames.has(n.name)) refs.add(n.name)
           else if (importLocals.has(n.name)) for (const o of useOwners) addUse(result, n.name, o)
         }
         return
+      }
+      if (n.type === 'JSXMemberExpression' && n.object.type === 'JSXIdentifier' && importLocals.has(n.object.name) && !shadowed(n.object.name)) {
+        for (const o of useOwners) addUse(result, `${n.object.name}.${n.property.name}`, o)
       }
       // 导入对象的成员：Auth.openDialog、Sdk.Auth.openDialog（命名空间导入），最多 3 层；规则里的 via 可以写到成员
       if (n.type === 'MemberExpression') {
