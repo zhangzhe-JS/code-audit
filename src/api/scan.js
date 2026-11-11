@@ -24,6 +24,8 @@ import { buildLookup, resolveSpec } from '../collect/path-refs.js'
 import { compileCalls } from './rules.js'
 import { extractFile, loadParser, MODULE, TEMPLATE } from './extract.js'
 import { endpointKey, isExternalPath, mayHit } from './normalize.js'
+import { createMenuFinder, startFiles } from './menus.js'
+import { findGlobalComponents, findTagUses } from '../collect/global-components.js'
 
 export const API_SCHEMA_VERSION = 1
 
@@ -64,15 +66,23 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   const parser = loadParser(knip.dir)
   const snap = createSnapshot(root, commit)
   let parsed
+  let tagUses = new Map()
   try {
     // 测试文件不分析：测试里的地址不是业务在用的接口
     const tests = new Set(snap.list(config.testEntries.map((p) => `:(glob)${p}`)))
     const sources = snap.list(config.sourceRoots).filter((f) => config.extensions.some((e) => f.endsWith(e)) && !f.endsWith('.d.ts') && !tests.has(f))
-    snap.extract(sources)
-    parsed = sources.map((path) => extractFile({
+    // 全局组件的声明文件（components.d.ts 等）：只在模板里写标签的组件靠它连上引用方，菜单归属要用
+    const declarations = config.menus.length > 0 ? snap.list(config.sourceRoots).filter((f) => f.endsWith('.d.ts')) : []
+    snap.extract([...sources, ...declarations])
+    const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+    if (declarations.length > 0) {
+      const globals = findGlobalComponents({ files: declarations.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') })), sourceSet: new Set(sources), aliases: config.aliases })
+      tagUses = findTagUses({ files: contents, components: globals.components })
+    }
+    parsed = contents.map(({ path, content }) => extractFile({
       parser,
       path,
-      content: readFileSync(join(snap.dir, path), 'utf8'),
+      content,
       calls,
       attrs: config.api.attrs ?? [],
       prefixes: config.api.prefixes ?? [],
@@ -178,6 +188,19 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   // 5. 状态
   let list = [...endpoints.values()].map((ep) => finishEndpoint(ep, callers))
   list = list.map((ep) => guardDeadEndpoint(ep, list, coverage))
+  // 菜单归属：配置了 menus 才算；在用的接口从在用的定义（SDK 接口从引用 SDK 功能的文件）往上找
+  if (config.menus.length > 0) {
+    const byPath = new Map(parsed.map((p) => [p.path, p]))
+    const findMenus = createMenuFinder({ parsed, unreachable, aliases: config.aliases, menus: config.menus, callers, tagUses })
+    list = list.map((ep) => {
+      if (ep.status !== 'live') return ep
+      const names = new Set()
+      for (const d of ep.definitions.filter((x) => x.state === 'live')) for (const m of findMenus(startFiles(d, callers, byPath), d).menus) names.add(m)
+      if (ep.sdk?.refs?.length) for (const m of findMenus([...new Set(ep.sdk.refs.map((r) => r.from))]).menus) names.add(m)
+      const ordered = config.menus.map((m) => m.name).filter((n) => names.has(n))
+      return { ...ep, menus: ordered }
+    })
+  }
   list = list.sort((a, b) => (a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path)))
   const byStatus = {}
   for (const ep of list) byStatus[ep.status] = (byStatus[ep.status] ?? 0) + 1
@@ -303,6 +326,8 @@ export function findCallers({ parsed, unreachable, aliases, onlyUnreachable = fa
     const p = byFile.get(file)
     if (!p || depth > 5) return []
     for (const [local, b] of p.bindings) if (b.exported.has(name)) return [[file, local]]
+    // 单文件组件的默认导入就是组件本身（<script setup> 没有写 export default）
+    if (name === 'default' && SFC_EXTENSIONS.some((e) => file.endsWith(e))) return [[file, 'default']]
     const out = []
     for (const re of p.reexports) {
       const target = resolveModule(re.source, file)

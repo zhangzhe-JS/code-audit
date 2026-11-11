@@ -9,7 +9,7 @@
  * 5. 合并连续的 /，去掉结尾的 /
  * 6. 路径参数统一为 {}：整段是变量的写成 {}；一段里既有文字又有变量的（如 detail{}）原样保留
  *
- * 写了完整网址（http://主机/路径）的：保留 //主机，不和自家后端的同名路径混在一起（多半是第三方服务）
+ * 完整网址或省略协议的网址（http://主机/路径、//主机/路径）：保留 //主机，不和自家后端的同名路径混在一起（多半是第三方服务）
  *
  * 整个路径里没有一个文字段时（只有变量）返回 null：算不出是哪个接口
  */
@@ -24,7 +24,7 @@ export function normalizePath(raw, { prefixes = [] } = {}) {
   let p = raw.trim()
   p = p.replace(/[?#].*$/s, '')
   let host = ''
-  const full = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)/i.exec(p)
+  const full = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/]+)/i.exec(p)
   if (full) {
     host = full[1].toLowerCase()
     p = p.slice(full[0].length)

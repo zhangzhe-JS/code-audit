@@ -53,6 +53,8 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {BranchesConfig} branches scan 用：判断「其他分支在用」时查哪些没合并的分支
  * @property {QuarantineConfig} quarantine quarantine 用：隔离区放在哪
  * @property {object|null} api  code-audit api 用：接口维度的规则（请求写法、前缀、SDK 接口等），见 src/api/rules.js。null = 没配置
+ * @property {{name: string, files: string[], global?: boolean}[]} menus  菜单划分：在用的接口顺着引用关系往上找，落到哪些菜单的文件里。
+ *   global: true 的（布局、入口、路由、状态管理）只在找不到具体菜单时才用
  */
 
 /**
@@ -135,7 +137,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 隔离区：默认就近，放进文件所在目录下的 _deprecated
   quarantine: Object.freeze({ layout: 'nearby', dirName: '_deprecated', dir: null, base: null }),
   // 接口维度的规则（code-audit api 用）：没有默认值，各项目的请求写法不同，见 src/api/rules.js
-  api: null
+  api: null,
+  // 菜单划分（api 的「使用菜单」用）：哪些文件属于哪个菜单，默认没有；可以由模型读路由和权限树生成
+  menus: Object.freeze([])
 })
 
 /**
@@ -288,6 +292,21 @@ export function resolveConfig(overrides = {}) {
   }
 
   if (config.api !== null) errors.push(...validateApiConfig(config.api))
+  if (!Array.isArray(config.menus)) {
+    errors.push('menus 必须是数组，如 [{ name: "模板管理", files: ["src/views/template/**"] }]')
+  } else {
+    const names = new Set()
+    config.menus.forEach((m, i) => {
+      const at = `menus[${i}]`
+      if (!isPlainObject(m)) return errors.push(`${at} 必须是对象，如 { name, files }`)
+      for (const k of Object.keys(m)) if (!['name', 'files', 'global'].includes(k)) errors.push(`${at} 不认识的字段：${k}（可用的字段：name、files、global）`)
+      if (typeof m.name !== 'string' || m.name.trim() === '') errors.push(`${at}.name 必须是菜单名`)
+      else if (names.has(m.name)) errors.push(`${at}.name 重复：${m.name}`)
+      else names.add(m.name)
+      if (!Array.isArray(m.files) || m.files.length === 0 || !m.files.every(isRelativeGlob)) errors.push(`${at}.files 必须是相对仓库根目录的路径或 glob 组成的非空数组`)
+      if (m.global !== undefined && typeof m.global !== 'boolean') errors.push(`${at}.global 必须是 true / false`)
+    })
+  }
 
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
@@ -311,7 +330,8 @@ export function resolveConfig(overrides = {}) {
     }),
     branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) }),
     quarantine: Object.freeze({ ...config.quarantine }),
-    api: config.api === null ? null : deepFreeze(structuredClone(config.api))
+    api: config.api === null ? null : deepFreeze(structuredClone(config.api)),
+    menus: deepFreeze(structuredClone(config.menus))
   })
 }
 

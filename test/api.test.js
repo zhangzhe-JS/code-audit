@@ -10,6 +10,7 @@ import { scanApi, usedBindings } from '../src/api/scan.js'
 import { resolveConfig } from '../src/core/config.js'
 import { createRepo } from './helpers/repo.js'
 import { buildApiReport, toCsv, toMarkdown, validateApiResult } from '../src/api/report.js'
+import { createMenuFinder } from '../src/api/menus.js'
 import { findDefined, traceDefinition, summarizeHistory, commitOrder } from '../src/api/history.js'
 
 const parser = loadParser(findKnip().dir)
@@ -295,6 +296,23 @@ test('scanApi：在用 / 没人用 / 文件走不到 / 本文件内部在用 / S
 // ---------- 汇总报告 ----------
 
 
+test('buildApiReport：特殊项目名不能丢失在用状态或定义', () => {
+  const result = (name, status) => finalize({
+    kind: 'api', version: 1, project: { name, rev: 'x' }, rules: { version: 1 }, coverage: {},
+    endpoints: [{ key: 'GET /a', method: 'GET', path: '/a', status, evidence: [{ detail: 'd' }],
+      definitions: [{ file: 'src/api.js', line: 1, fn: 'load' }], callers: [{ from: 'src/main.js' }] }]
+  })
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    for (const others of [[], [result('ordinary', 'dead')]]) {
+      const report = buildApiReport([result(name, 'live'), ...others])
+      assert.equal(report.rows[0].verdict, '在用', name)
+      assert.equal(report.rows[0].statuses[name], 'live')
+      assert.ok(report.rows[0].definitions.some((d) => d.project === name))
+      assert.deepEqual(report.rows[0].callers, [`${name}:src/main.js`])
+    }
+  }
+})
+
 test('buildApiReport：跨项目合并；在用 > SDK 保留 > 高风险 > 需审核 > 可删；CSV 带 BOM、转义', () => {
   const commit = { hash: 'a'.repeat(40), date: '2026-01-02', author: 'bob', subject: 'remove "x", y' }
   const ep = (key, status, extra = {}) => ({ key, method: key.split(' ')[0], path: key.split(' ')[1], status, evidence: [{ rule: 'r', detail: 'd' }], definitions: [{ file: 'src/a.js', line: 1, fn: 'f' }], callers: [], ...extra })
@@ -494,6 +512,7 @@ test('scanApi：方法算不出的在用调用、拼了变量的在用路径，�
       "export const oldExport = () => request({ url: '/report/exportExcel' })",
       "export const cdn = () => request({ url: 'https://cdn.example.com/order/list' })",
       "export const oldCdn = () => request({ url: 'https://cdn.example.com/old' })",
+      "export const relativeCdn = () => request({ url: '//CDN.example.com/relative' })",
       "export const oldList = () => request({ url: '/order/list' })"
     ].join('\n'))
     repo.commit('i')
@@ -501,6 +520,7 @@ test('scanApi：方法算不出的在用调用、拼了变量的在用路径，�
     assert.deepEqual(Object.fromEntries(r.endpoints.map((e) => [e.key, e.status])), {
       'GET //cdn.example.com/order/list': 'live',
       'GET //cdn.example.com/old': 'external',
+      'GET //cdn.example.com/relative': 'external',
       'GET /order/list': 'dead',
       'PUT /order/save': 'unknown',
       'GET /report/export{}': 'live',
@@ -547,7 +567,7 @@ test('summarizeHistory：每个定义都确认从没被调用才算 never；有�
   assert.equal(summarizeHistory([{ state: 'dead', history: { lostRef: null, introduced: c('2024-02-01') } }, { state: 'dead', history: { lostRef: null, introduced: c('2024-01-01') } }]).introduced.date, '2024-01-01')
   assert.equal(summarizeHistory([{ state: 'dead', history: { lostRef: null, introduced: null, unresolved: '仍被没人用的文件引用' } }]), null)
   assert.equal(summarizeHistory([{ state: 'dead', history: { lostRef: null, introduced: c('2024-01-01') } }, { state: 'dead' }]), null, '有定义没查历史')
-  assert.equal(summarizeHistory([{ state: 'dead', history: { lostRef: { commit: c('2024-03-01'), from: 'x' } } }, { state: 'dead', history: { lostRef: null, introduced: null, unresolved: 'x' } }]).type, 'lost')
+  assert.equal(summarizeHistory([{ state: 'dead', history: { lostRef: { commit: c('2024-03-01'), from: 'x' } } }, { state: 'dead', history: { lostRef: null, introduced: null, unresolved: 'x' } }]), null, '部分定义历史未查明，不能由另一处的 lost 覆盖')
 })
 
 test('traceDefinition：别的文件只是改了调用（之后还引用着）不算失去引用，也不判从没被调用', () => {
@@ -660,4 +680,115 @@ test('scanApi：SDK 的 via 认得命名空间导入、默认导入和解构', (
   } finally {
     repo.cleanup()
   }
+})
+
+
+test('normalizePath：省略协议的网址保留主机，重复归一化不变', () => {
+  for (const raw of ['//Host:8080/api/x?q=1', 'https://Host:8080/api/x?q=1']) {
+    const normalized = normalizePath(raw, { prefixes: ['/api'] })
+    assert.equal(normalized, '//host:8080/api/x')
+    assert.equal(normalizePath(normalized, { prefixes: ['/api'] }), normalized)
+  }
+  assert.equal(normalizePath('//host'), '//host/')
+  assert.equal(normalizePath('/api//x', { prefixes: ['/api'] }), '/x')
+})
+
+test('接口历史汇总到报告：任何定义缺少证据或只有弱证据，都不能判可删', () => {
+  const commit = (date) => ({ hash: date, date, author: 'a', subject: 's' })
+  const strong = { state: 'dead', history: { lostRef: { commit: commit('2024-03-01'), from: 'src/page.js', weak: false } } }
+  const cases = [
+    [{ state: 'dead' }, 'B 需审核'],
+    [{ state: 'dead', history: { lostRef: null, introduced: null, unresolved: '达到查询上限' } }, 'B 需审核'],
+    [{ state: 'dead', history: { lostRef: { commit: commit('2024-01-01'), from: 'src/old.js', weak: true } } }, 'B 需审核'],
+    [{ state: 'dead', history: { lostRef: null, introduced: commit('2024-01-01') } }, 'A 可删']
+  ]
+  for (const [other, expected] of cases) {
+    const definitions = [strong, other].map((d, i) => ({ file: `src/api${i}.js`, line: 1, fn: 'load', ...d }))
+    const history = summarizeHistory(definitions)
+    const result = finalize({ kind: 'api', version: 1, project: { name: 'p', rev: 'x' }, rules: { version: 1 }, historyTraced: true, coverage: {}, endpoints: [
+      { key: 'GET /a', method: 'GET', path: '/a', status: 'dead', evidence: [{ detail: 'd' }], definitions, callers: [], history }
+    ] })
+    assert.equal(buildApiReport([result]).rows[0].verdict, expected)
+  }
+})
+
+test('scanApi 菜单归属：按名字追、共享组件、全局停住、Vuex 按 action（不在 action 里的退回按命名空间）、script setup 默认导入、异步组件、同文件封装', () => {
+  const repo = createRepo()
+  try {
+    repo.write('package.json', JSON.stringify({ name: 'm', type: 'module', dependencies: { vue: '3.0.0' } }))
+    repo.write('src/main.js', [
+      "import './store/index.js'",
+      "import Layout from './layout/Layout.vue'",
+      "import { boot } from './layout/boot.js'",
+      'boot()',
+      "export const routes = [() => import('./views/a/PageA.vue'), () => import('./views/b/PageB.vue'), () => import('./views/c/PageC.vue'), () => import('./views/d/PageD.vue')]",
+      'console.log(Layout)'
+    ].join('\n'))
+    repo.write('src/utils/http.js', "export const get = (u) => fetch(u)\n")
+    // api：汇总导出文件把所有 api 一起导出
+    repo.write('src/api/order.js', [
+      "import { get } from '../utils/http.js'",
+      "export const listOrders = () => get('/order/list')",
+      "export const exportOrders = () => get('/order/export')",
+      "export const upload = () => get('/file/upload')",
+      'export const uploadForA = () => upload()',
+      "export const loadDict = () => get('/dict')",
+      "export const orphanUse = () => get('/orphan')",
+      "export const lazyThing = () => get('/lazy')",
+      "export const loadBoot = () => get('/boot')"
+    ].join('\n'))
+    repo.write('src/api/index.js', "export * from './order.js'\n")
+    // Vuex：根 store 注册 order 模块，模块里的 action 调用接口
+    repo.write('src/store/index.js', "import order from './modules/order.js'\nexport default { modules: { order } }\n")
+    repo.write('src/store/modules/order.js', "import { exportOrders, loadDict } from '../../api/index.js'\nexport default { namespaced: true, actions: { doExport() { return exportOrders() }, other() { return 1 } }, state: () => ({ dict: loadDict }) }\n")
+    // 共享组件放在 A 的目录里，B 也在用
+    repo.write('src/views/a/components/OrderTable.vue', "<template><div /></template>\n<script setup>\nimport { listOrders } from '@/api'\nlistOrders()\n</script>\n")
+    repo.write('src/views/a/PageA.vue', "<template><OrderTable /></template>\n<script setup>\nimport OrderTable from './components/OrderTable.vue'\nimport { uploadForA } from '@/api'\nuploadForA()\n</script>\n")
+    repo.write('src/views/b/PageB.vue', "<template><OrderTable /></template>\n<script setup>\nimport OrderTable from '../a/components/OrderTable.vue'\nimport { useStore } from 'vuex'\nconst s = useStore(); s.dispatch('order/doExport')\n</script>\n")
+    // C：用到 order 模块的其他东西（mapState），但不派发 doExport；从汇总文件引入别的接口
+    repo.write('src/views/c/PageC.vue', "<template><Badge /></template>\n<script>\nimport { mapState } from 'vuex'\nimport { orphanUse } from '@/api'\nimport { helper } from '../../layout/boot.js'\nexport default { computed: { ...mapState('order', ['dict']) }, created() { orphanUse(); console.log(helper) } }\n</script>\n")
+    // D：异步加载一个组件，组件里调接口
+    repo.write('src/views/d/PageD.vue', "<template><Lazy /></template>\n<script setup>\nimport { defineAsyncComponent } from 'vue'\nconst Lazy = defineAsyncComponent(() => import('./Lazy.vue'))\n</script>\n")
+    repo.write('src/views/d/Lazy.vue', "<template><div /></template>\n<script setup>\nimport { lazyThing } from '@/api'\nlazyThing()\n</script>\n")
+    repo.write('src/layout/Layout.vue', "<template><div /></template>\n<script setup>\nimport { loadDict } from '@/api'\nloadDict()\n</script>\n")
+    // 全局目录下的启动文件：每个页面都引用它，从它往上不能摊到所有页面
+    repo.write('src/layout/boot.js', "import { loadBoot } from '../api/order.js'\nexport const boot = () => loadBoot()\nexport const helper = 1\n")
+    // 全局组件：在声明文件里登记，页面只写标签不 import
+    repo.write('src/components.d.ts', "export {}\ndeclare module 'vue' {\n  export interface GlobalComponents {\n    Badge: typeof import('./components/Badge.vue')['default']\n  }\n}\n")
+    repo.write('src/components/Badge.vue', "<template><i /></template>\n<script setup>\nimport { get } from '../utils/http.js'\nget('/badge')\n</script>\n")
+    repo.commit('i')
+    const config = resolveConfig({
+      entries: ['src/main.js'],
+      aliases: { '@': 'src' },
+      menus: [
+        { name: 'A', files: ['src/views/a/PageA.vue'] },
+        { name: 'B', files: ['src/views/b/PageB.vue'] },
+        { name: 'C', files: ['src/views/c/PageC.vue'] },
+        { name: 'D', files: ['src/views/d/PageD.vue'] },
+        { name: '全局', global: true, files: ['src/main.js', 'src/layout/**'] }
+      ],
+      api: { version: 1, calls: [{ call: 'get(url)', method: 'GET' }] }
+    })
+    const r = scanApi({ root: repo.root, project: 'm', config })
+    const menus = Object.fromEntries(r.endpoints.map((e) => [e.key, e.menus]))
+    assert.deepEqual(menus['GET /order/list'], ['A', 'B'], '共享组件在 A 的目录里，B 也在用')
+    assert.deepEqual(menus['GET /order/export'], ['B'], 'Vuex 按 action：只有派发 doExport 的 B，用了 mapState 的 C 不算')
+    assert.deepEqual(menus['GET /file/upload'], ['A'], '同文件封装 uploadForA 内部调用 upload')
+    assert.deepEqual(menus['GET /dict'], ['B', 'C', '全局'], '布局在用；store 里不在 action 里的引用退回按命名空间连：用到 order 命名空间的 B、C 都算（偏保守）')
+    assert.deepEqual(menus['GET /orphan'], ['C'], '从汇总文件引入：按名字追，不摊到所有引入汇总文件的页面')
+    assert.deepEqual(menus['GET /lazy'], ['D'], '异步组件 import()')
+    assert.deepEqual(menus['GET /boot'], ['全局'], '全局目录下的文件：碰到就停，不再往上摊到引用它的页面')
+    assert.deepEqual(menus['GET /badge'], ['C'], '全局组件：页面只写标签，靠声明文件连上')
+  } finally {
+    repo.cleanup()
+  }
+})
+
+test('createMenuFinder：引用链断了时未归属；配置校验', () => {
+  assert.throws(() => resolveConfig({ menus: [{ name: 'A', files: [] }] }), /files 必须是/)
+  assert.throws(() => resolveConfig({ menus: [{ name: 'A', files: ['a'] }, { name: 'A', files: ['b'] }] }), /name 重复/)
+  assert.throws(() => resolveConfig({ menus: [{ name: 'A', files: ['a'], typo: 1 }] }), /不认识的字段：typo/)
+  const find = createMenuFinder({ parsed: [], unreachable: new Map(), aliases: {}, menus: [{ name: 'A', files: ['src/a.vue'] }], callers: new Map() })
+  assert.deepEqual(find(['src/orphan.js']), { menus: [], global: false })
+  assert.deepEqual(find(['src/a.vue']), { menus: ['A'], global: false })
 })

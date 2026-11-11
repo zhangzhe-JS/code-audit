@@ -61,6 +61,7 @@ export function validateApiResult(r) {
     if (!Array.isArray(e.definitions) || !e.definitions.every((d) => isObj(d) && isStr(d.file) && Number.isInteger(d.line) && isStr(d.fn))) errors.push(`${at}.definitions 必须是 { file, line, fn } 组成的数组`)
     if (!Array.isArray(e.callers) || !e.callers.every((c) => isObj(c) && isStr(c.from))) errors.push(`${at}.callers 必须是 { from } 组成的数组`)
     if (e.sdk !== undefined && !(isObj(e.sdk) && isStr(e.sdk.package))) errors.push(`${at}.sdk 必须有 package`)
+    if (e.menus !== undefined && !(Array.isArray(e.menus) && e.menus.every(isStr))) errors.push(`${at}.menus 必须是菜单名组成的数组`)
     // 结论之间要对得上（不只是格式）
     const defs = Array.isArray(e.definitions) ? e.definitions : []
     const states = defs.map((d) => d?.state)
@@ -105,7 +106,7 @@ export function buildApiReport(results, names = []) {
   const merged = new Map()
   for (const r of results) {
     for (const ep of r.endpoints) {
-      const m = merged.get(ep.key) ?? { key: ep.key, method: ep.method, path: ep.path, byProject: {} }
+      const m = merged.get(ep.key) ?? { key: ep.key, method: ep.method, path: ep.path, byProject: Object.create(null) }
       m.byProject[r.project.name] = { ...ep, historyTraced: Boolean(r.historyTraced) }
       merged.set(ep.key, m)
     }
@@ -163,6 +164,8 @@ function judge(m, gaps) {
     reasons,
     definitions: entries.flatMap(([p, e]) => e.definitions.map((d) => ({ project: p, file: d.file, line: d.line, fn: d.fn }))),
     callers: entries.flatMap(([p, e]) => (e.status === 'live' ? e.callers.map((c) => `${p}:${c.from}`) : [])),
+    // 在用的项目各自用在哪些菜单；配置了菜单却一个都没找到的记为未归属（null = 那个项目没配置菜单）
+    menus: Object.fromEntries(entries.filter(([, e]) => e.status === 'live').map(([p, e]) => [p, e.menus === undefined ? null : e.menus])),
     history: entries.map(([p, e]) => (DEAD.includes(e.status) && e.history ? { project: p, ...e.history } : null)).filter(Boolean)
   }
 }
@@ -170,6 +173,11 @@ function judge(m, gaps) {
 // ---------- 输出 ----------
 
 const STATUS_TEXT = { live: '在用', dead: '没人用', 'dead-only-ref': '没人用（只被死代码引用）', 'test-only': '只有测试用', sdk: 'SDK 保留', pending: '其他分支在用', unknown: '无法判定', external: '构建配置等在用', dormant: '注释停用' }
+
+function menuText(r) {
+  const parts = Object.entries(r.menus).filter(([, m]) => m !== null).map(([p, m]) => `${p}：${m.length > 0 ? m.join('、') : '未归属（引用链断在动态加载、状态管理等看不到的地方）'}`)
+  return parts.join('\n')
+}
 
 function historyText(h) {
   if (!h) return ''
@@ -181,7 +189,7 @@ function historyText(h) {
 /** CSV（UTF-8 带 BOM，Excel 直接打开不乱码） */
 export function toCsv(report) {
   const names = report.projects.map((p) => p.name)
-  const header = ['结论', '方法', '路径', ...names, '依据', '定义位置', '在用的引用方', '停用 / 定义提交', '后端处理意见']
+  const header = ['结论', '方法', '路径', ...names, '使用菜单', '依据', '定义位置', '在用的引用方', '停用 / 定义提交', '后端处理意见']
   const esc = (v) => {
     const s = String(v ?? '')
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -193,6 +201,7 @@ export function toCsv(report) {
       r.method,
       r.path,
       ...names.map((n) => (r.statuses[n] ? STATUS_TEXT[r.statuses[n]] ?? r.statuses[n] : '—')),
+      menuText(r),
       r.reasons.join('；'),
       r.definitions.map((d) => `${d.project}:${d.file}:${d.line} ${d.fn}`).join('\n'),
       r.callers.slice(0, 10).join('\n') + (r.callers.length > 10 ? `\n…共 ${r.callers.length} 处` : ''),
@@ -221,6 +230,13 @@ export function toMarkdown(report, { now = new Date() } = {}) {
   }
   for (const v of VERDICTS) out.push(`| ${v} | ${count(v)} | ${meaning[v]} |`)
   out.push('', '> 前端只能看到前端代码里的调用。外部系统、脚本直接调用的接口看不到，后端删除前请结合网关 / 访问日志确认，并按小批量处理。', '')
+  const live = report.rows.filter((r) => r.verdict === '在用')
+  if (live.length > 0 && live.some((r) => Object.values(r.menus).some((m) => m !== null))) {
+    out.push(`## 在用（${live.length}）`, '')
+    out.push(`| 方法 | 路径 | ${names.join(' | ')} | 使用菜单 |`, `| --- | --- | ${names.map(() => '---').join(' | ')} | --- |`)
+    for (const r of live) out.push(`| ${r.method} | \`${r.path}\` | ${names.map((n) => (r.statuses[n] ? STATUS_TEXT[r.statuses[n]] ?? r.statuses[n] : '—')).join(' | ')} | ${cell(menuText(r))} |`)
+    out.push('')
+  }
   for (const v of VERDICTS.slice(1)) {
     const rows = report.rows.filter((r) => r.verdict === v)
     if (rows.length === 0) continue

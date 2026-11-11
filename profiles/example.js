@@ -57,6 +57,16 @@ export default {
   // 配置文件不在默认位置（vite.config.*）时加 bundlerConfig: 'web/vite.config.ts'
   verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800, bundler: 'vite' },
 
+  // ---------- 菜单归属（api 报告的「使用菜单」）用 ----------
+  // 具体菜单只写路由对应的页面入口文件（不写整个目录：放在 A 菜单目录下的共享组件可能是 B 菜单在用）；
+  // global: true 的（布局、入口、启动配置）碰到就停、不再往上，只在找不到具体菜单时单独出现。可以让模型读路由和权限树生成，人审核
+  menus: [
+    { name: '订单管理', files: ['src/views/order/index.vue', 'src/views/order/detail.vue'] },
+    { name: '用户管理', files: ['src/views/user/index.vue'] },
+    { name: '全局 · 登录鉴权', global: true, files: ['src/views/login/**'] },
+    { name: '全局 · 框架加载', global: true, files: ['src/main.js', 'src/App.vue', 'src/layout/**', 'src/router/**'] }
+  ],
+
   // ---------- api（接口维度）用 ----------
   // 请求是怎么发出去的。照着代码写，参数换成占位：url 地址、method 方法、_ 任意参数、... 后面还有参数、* 取 HTTP 方法名
   // 没有默认值：各项目的请求封装不同。可以让模型读请求封装和几份 api 文件后生成，人审核；跑 code-audit api 看覆盖报告，按它补到清零

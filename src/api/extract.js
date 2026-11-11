@@ -71,13 +71,17 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   const lines = lineStarts(code)
   const lineOf = (pos) => upperBound(lines, pos)
   // importUses：导入的名字（本地名）被哪些顶层名字引用（SDK 的功能有没有被在用的代码引用）
-  const result = { path, sites: [], suspects: [], bindings: new Map(), imports: [], reexports: [], importUses: new Map(), errors: [] }
+  // dynamicImports：写死路径的 import('...')（异步组件等），菜单归属用来连引用
+  // storeUses：用到的 Vuex 命名空间（dispatch('ns/x')、mapActions('ns') 等）；storeModules：这个文件里注册的 Vuex 模块（modules: { ns: 模块 }）
+  // storeActionUses：用到的具体 action（ns/action）；storeActions：这个文件里的 Vuex actions 各自引用了哪些导入的名字
+  const result = { path, sites: [], suspects: [], bindings: new Map(), imports: [], reexports: [], importUses: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
 
   if (program) {
     collectTopLevel(program, result)
+    collectStoreActions(program, result, parser.visitorKeys)
     const consts = topLevelConsts(program)
     walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys: parser.visitorKeys })
     for (const c of addressConsts) {
@@ -262,6 +266,7 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
           if (pr.type === 'Property' && !pr.computed && pr.key.type === 'Identifier') for (const o of useOwners) addUse(result, `${n.init.name}.${pr.key.name}`, o)
         }
       }
+      collectLinks(n, result)
       const frame = scopeFrame(n, keys)
       if (frame) frames.push(frame)
       if (n.type === 'CallExpression' && !consumed.has(n)) {
@@ -365,6 +370,96 @@ function flattenScope(frames) {
     }
   }
   return { consts, params, opaque }
+}
+
+/**
+ * Vuex 的 actions（actions: { getX() { ... } }、export const actions = { ... }）各自引用了哪些导入的名字：
+ * 菜单归属按 action 连，只连到派发这个 action 的页面；按整个模块连，用到同一模块其他状态的页面都会算进来
+ */
+function collectStoreActions(program, result, keys) {
+  const locals = new Set(result.imports.flatMap((i) => i.specifiers.map((sp) => sp.local)))
+  if (locals.size === 0) return
+  const objects = []
+  const visit = (n) => {
+    if (!n || typeof n.type !== 'string') return
+    if (n.type === 'Property' && !n.computed && n.key.type === 'Identifier' && n.key.name === 'actions' && n.value.type === 'ObjectExpression') objects.push(n.value)
+    if (n.type === 'VariableDeclarator' && n.id.type === 'Identifier' && n.id.name === 'actions' && n.init?.type === 'ObjectExpression') objects.push(n.init)
+    for (const k of keys[n.type] ?? []) {
+      const c = n[k]
+      if (Array.isArray(c)) c.forEach(visit)
+      else if (c && typeof c === 'object') visit(c)
+    }
+  }
+  visit(program)
+  for (const obj of objects) {
+    for (const pr of obj.properties) {
+      if (pr.type !== 'Property' || pr.computed) continue
+      const name = pr.key.type === 'Identifier' ? pr.key.name : stringValue(pr.key)
+      if (!name) continue
+      const refs = new Set()
+      const walk = (n) => {
+        if (!n || typeof n.type !== 'string') return
+        if (n.type === 'Identifier' && locals.has(n.name)) refs.add(n.name)
+        for (const k of keys[n.type] ?? []) {
+          const c = n[k]
+          if (Array.isArray(c)) c.forEach(walk)
+          else if (c && typeof c === 'object') walk(c)
+        }
+      }
+      walk(pr.value)
+      result.storeActions.push({ name, refs: [...refs] })
+    }
+  }
+}
+
+const STORE_HELPERS = new Set(['mapActions', 'mapState', 'mapGetters', 'mapMutations', 'createNamespacedHelpers'])
+
+/** 字符串字面量（含没有变量的模板字符串）的值 */
+function stringValue(n) {
+  if (!n) return null
+  if (n.type === 'Literal' && typeof n.value === 'string') return n.value
+  if (n.type === 'TemplateLiteral' && n.expressions.length === 0) return n.quasis[0].value.cooked
+  return null
+}
+
+/**
+ * 菜单归属要用的引用关系（不影响接口判定）：
+ * - 写死路径的 import('...')：异步组件、懒加载的页面
+ * - Vuex：dispatch / commit('ns/动作')、mapActions / mapState / mapGetters / mapMutations / createNamespacedHelpers('ns')、getters['ns/x']
+ *   页面通过字符串派发用到 store 模块，没有 import，不认就连不上
+ * - Vuex 的模块注册：modules: { ns: 模块 }（值是 import 进来的名字）
+ */
+function collectLinks(n, result) {
+  if (n.type === 'ImportExpression') {
+    const v = stringValue(n.source)
+    if (v) result.dynamicImports.push(v)
+  } else if (n.type === 'CallExpression') {
+    const callee = n.callee.type === 'MemberExpression' && !n.callee.computed ? n.callee.property.name : n.callee.type === 'Identifier' ? n.callee.name : null
+    const first = stringValue(n.arguments[0])
+    if (first !== null && (callee === 'dispatch' || callee === 'commit') && first.includes('/')) {
+      result.storeUses.add(first.slice(0, first.lastIndexOf('/')))
+      if (callee === 'dispatch') result.storeActionUses.add(first)
+    }
+    if (first !== null && STORE_HELPERS.has(callee)) {
+      const ns = first.replace(/\/+$/, '')
+      result.storeUses.add(ns)
+      // mapActions('ns', ['a', 'b']) / mapActions('ns', { x: 'a' })：具体用到哪些 action
+      const second = n.arguments[1]
+      if (callee === 'mapActions' && second) {
+        const names = second.type === 'ArrayExpression' ? second.elements.map(stringValue) : second.type === 'ObjectExpression' ? second.properties.map((pr) => (pr.type === 'Property' ? stringValue(pr.value) : null)) : []
+        for (const a of names) if (a) result.storeActionUses.add(`${ns}/${a}`)
+      }
+    }
+  } else if (n.type === 'MemberExpression' && n.computed && n.object.type === 'MemberExpression' && !n.object.computed && n.object.property.name === 'getters') {
+    const v = stringValue(n.property)
+    if (v && v.includes('/')) result.storeUses.add(v.slice(0, v.lastIndexOf('/')))
+  } else if (n.type === 'Property' && !n.computed && n.key.type === 'Identifier' && n.key.name === 'modules' && n.value.type === 'ObjectExpression') {
+    for (const pr of n.value.properties) {
+      if (pr.type !== 'Property' || pr.computed) continue
+      const name = pr.key.type === 'Identifier' ? pr.key.name : stringValue(pr.key)
+      if (name && pr.value.type === 'Identifier') result.storeModules.push({ name, local: pr.value.name })
+    }
+  }
 }
 
 /** a.b.c → ['a', 'b', 'c']；有计算属性或开头不是名字时返回 null */

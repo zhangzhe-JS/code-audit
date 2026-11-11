@@ -331,6 +331,12 @@ node bin/code-audit.js api-report --in reports/a/api.json --in reports/b/api.jso
 - `api-report` 的结论：在用 / C 保留（SDK）/ C 高风险（pending、unknown 等）/ B 需审核（证据不够硬、规则没补全）/ A 可删。`endpoints.csv` 带 BOM，Excel 直接打开，留了「后端处理意见」一列
 - 只看得到前端代码：A 可删也只是前端没人用，后端删之前要看网关日志，并且小批量删
 
+**菜单归属**：profile 里写 `menus`（写法见 `profiles/example.js`），结果和报告里每个在用的接口会带上「使用菜单」。
+从接口定义出发往上找引用方：按名字追（不会因为汇总导出文件摊到所有页面），穿过组件、工具，
+认 `import()` 异步组件、全局组件的模板标签、Vuex 的 `dispatch('ns/action')` / `mapActions`（按 action 连到派发它的页面，
+不在 action 里的退回按命名空间），碰到页面入口或 global 菜单的文件就停。找不到的写「未归属」，不猜。
+能力边界：第一步按名字追到引用方之后，再往上是按文件连的，可能多算使用方（偏保守，不会少算）
+
 ---
 
 ## 开发

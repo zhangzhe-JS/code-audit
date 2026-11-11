@@ -79,9 +79,12 @@ export function commitOrder(root, rev) {
 const byDate = (a, b) => b.date.localeCompare(a.date)
 
 export function summarizeHistory(defs, newer = byDate) {
-  const lost = defs.map((d) => d.history?.lostRef).filter(Boolean).sort((a, b) => newer(a.commit, b.commit))
-  if (lost.length > 0) return { type: 'lost', ...lost[0] }
   const dead = defs.filter((d) => DEAD.has(d.state))
+  // 每处定义都要有证据：不能用某一处的失去引用掩盖另一处未查明的历史。
+  if (dead.some((d) => !d.history || d.history.unresolved || (!d.history.lostRef && !(d.history.lostRef === null && d.history.introduced)))) return null
+  const lost = dead.map((d) => d.history.lostRef).filter(Boolean).sort((a, b) => newer(a.commit, b.commit))
+  // 展示最近一次失去引用，但任何一处只按名字匹配，整个接口仍需审核。
+  if (lost.length > 0) return { type: 'lost', ...lost[0], weak: lost.some((h) => h.weak) }
   if (dead.length > 0 && dead.every((d) => d.history && d.history.lostRef === null && d.history.introduced && !d.history.unresolved)) {
     const intro = dead.map((d) => d.history.introduced).sort((a, b) => newer(b, a))
     return { type: 'never', introduced: intro[0] }
