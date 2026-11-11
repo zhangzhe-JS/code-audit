@@ -325,6 +325,16 @@ node bin/code-audit.js exports-report --in reports/my-app/exports.json --out rep
   静态分析说没人用、构建却保留了的改判 unknown；构建也摇掉了的记成佐证（不单凭它判死）。要在 profile 的 verify 里写 build 和 bundler
 - 只看从入口走得到的文件；走不到的文件由文件维度的 scan 处理
 
+### 改之前先看风险：check、query、mcp
+
+- `code-audit check --root . --profile x.js --base origin/master [--index 其他项目的 api.json] [--fail-on risk]`：对比两个提交的接口变化。
+  要处理：同一个函数调用的接口地址改了；要确认：新增的和已有的很像（可能重复写了）、在用变成没人用、多处在用的定义、规则认不出的新写法；
+  知道一下：新增、不再定义、重新在用、改到了在用接口的定义（附使用菜单）。输出 Markdown，可以贴进合并请求
+- `code-audit query --dir 结果目录 --api "GET /x/{}"`（或 `--similar`、`--search`、`--file`）：在生成好的结果里查影响、相似接口
+- `code-audit mcp --dir 结果目录 [--check 仓库目录::profile]`：MCP 服务（stdio），工具 api_impact、similar_apis、search_apis、file_info、check_change，给 AI 编码工具用。
+  check_change 只能检查 `--check` 登记过的项目：profile 是会被加载执行的 JS，不能让模型随意传路径
+- CI 的配置示例见 `docs/ci.md`
+
 ### 接口维度
 
 回答「这个接口（方法 + 路径）前端还在不在用、什么时候不用的」。在 profile 里写 `api` 规则，说明请求是怎么发出去的：
