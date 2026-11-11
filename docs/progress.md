@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-12
-- 测试：520 个，全部通过（`npm test`）
+- 测试：530 个，全部通过（`npm test`）
 
 ---
 
@@ -33,6 +33,7 @@
 | M12 | 导出维度：exports（没人用的导出，8 种状态）、--history、exports-report | ✅ 4 个项目跑通，抽查核对 |
 | M13 | 改之前先看风险：check（两个提交的接口变化）、query（查结果）、mcp（给 AI 编码工具）、CI 模板 | ✅ 真实提交上验证 |
 | M14 | context：整理生成 profile 的材料（不调用模型，脱敏） | ✅ 4 个项目生成材料，人工核对 |
+| M15 | 打包器证据：webpack（3/4/5）、vue-cli 适配器 | ✅ webpack 4/5、Vue CLI 5 实际构建验证 |
 
 ---
 
@@ -873,4 +874,19 @@ stdio 传输、每行一条 JSON-RPC 2.0，不依赖 SDK；initialize、tools/li
 - 脱敏：网址主机名 → `<host>`，IP → `<ip>`，密钥类变量（TOKEN、KEY、SECRET 等）不论取值都 `<已隐藏>`，不是路径也不是网址的取值（可能是主机名）也隐藏；scripts、覆盖报告同样脱敏
 - 同一个文件既是封装又是样本时只读一次（缓存）
 - 反向检查：逐个撤掉 7 处关键逻辑（IP、密钥、主机名取值、scripts、按定义打分、读缓存、覆盖报告脱敏），每处都有测试失败（4 处一开始没抓到，补了测试）
+
+## M15 webpack、vue-cli 适配器 ✅
+
+`src/verify/bundlers/webpack.js`、`vue-cli.js`，登记到 BUNDLERS 后 profile 校验、verify、exports --verify 自动可用。
+
+- 套配置的做法和 vite 一样（改名 + 同名包装配置）。包装的模块格式跟原文件：.cjs/.cts CommonJS、.mjs/.mts ESM，.js/.ts 看最近的 package.json 的 type（不出临时目录）
+- webpack 配置的导出：对象、数组、函数 (env, argv)（this 和参数原样传）、Promise 及组合；编译出来的 `__esModule` 配置套 default 并保留 `__esModule`（顺带修了 vite 包装里展开时丢掉不可枚举 `__esModule` 的问题）
+- vue-cli：在 chainWebpack 里加插件，原来的先照常跑；vue.config 导出对象、函数、Promise 都认
+- 记录插件（webpack 3/4/5 通用）：done 时写 `{ ids, exports }`，构建有错误不写
+  - 实测：webpack 5 生产模式把模块合并（ConcatenatedModule）后，入口模块只在合并模块里面，要展开；其他模块两处都有，要去重
+  - webpack 5 的使用状态：Unused 记摇掉，OnlyPropertiesUsed / Unknown / Used 记保留，NoInfo（开发模式没算）不记；只看确定提供的导出
+  - webpack 3/4：usedExports 数组 / true / false 记，null 不记；providedExports 不是数组（CommonJS）不记
+- 实际构建验证：webpack 4.47、5.112（对象、数组、函数、Promise、.mjs、__esModule 配置），Vue CLI 5（对象、函数 + Promise、chainWebpack 保留、type: module + vue.config.mjs）
+- 端到端：webpack 配置里算出来的入口加载的文件（静态分析判 dead），verify 改判 unknown 不删；exports --verify 给没人用的导出记上 tree-shaking 佐证；目标仓库不变
+- 反向检查：逐个撤掉 16 处关键逻辑，每处都有测试失败（「函数结果只套一层」「Promise 不套」一开始没抓到：Promise 也是对象，展开后插件照样在，补了「返回的还是 Promise、原有字段还在」的断言）
 

@@ -84,6 +84,15 @@ test('vite 适配器：导出函数、异步函数时形状不变；CommonJS 配
   instrumentVite({ dir: tree, outDir: join(dir, 'cjs-out') })
   const c = createRequire(import.meta.url)(join(tree, 'vite.config.cjs'))
   assert.deepEqual(c.plugins.map((p) => p.name), ['code-audit:modules'])
+
+  // 编译出来的 CommonJS（__esModule 不可枚举）：套 default，__esModule 不能丢
+  const esm = join(dir, 'esm')
+  mkdirSync(esm)
+  writeFileSync(join(esm, 'vite.config.cjs'), "Object.defineProperty(exports, '__esModule', { value: true }); exports.default = { plugins: [] }\n")
+  instrumentVite({ dir: esm, outDir: join(dir, 'esm-out') })
+  const m = createRequire(import.meta.url)(join(esm, 'vite.config.cjs'))
+  assert.equal(m.__esModule, true)
+  assert.deepEqual(m.default.plugins.map((p) => p.name), ['code-audit:modules'])
 })
 
 test('vite 适配器：按 Vite 的顺序找配置文件；找不到、指定的不存在时报错；不支持的打包器报错', (t) => {
@@ -95,7 +104,7 @@ test('vite 适配器：按 Vite 的顺序找配置文件；找不到、指定的
   mkdirSync(empty)
   assert.throws(() => instrumentVite({ dir: empty, outDir: join(dir, 'o') }), /没有找到 vite 配置文件.*verify\.bundlerConfig/)
   assert.throws(() => instrumentVite({ dir: empty, outDir: join(dir, 'o'), config: 'web/vite.config.js' }), /指定的 vite 配置文件不在提交里/)
-  assert.throws(() => instrument({ type: 'webpack', dir, outDir: join(dir, 'o') }), /不支持的打包器：webpack/)
+  assert.throws(() => instrument({ type: 'rollup', dir, outDir: join(dir, 'o') }), /不支持的打包器：rollup（支持：vite、webpack、vue-cli）/)
 })
 
 test('toRepoFile、collectModules：去掉查询参数和虚拟模块，依赖包、临时目录外的不要；两种临时目录写法都认；读完清空', (t) => {

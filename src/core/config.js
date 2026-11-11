@@ -80,7 +80,7 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {string|null} build  构建命令，如 "npm run build"；必须能无人值守跑完（不能停下来等人输入）
  * @property {string|null} test   测试命令，如 "npm test"；不写就不跑测试
  * @property {number} timeoutSeconds 每条命令最多跑多久，超时算失败
- * @property {string|null} bundler 打包器证据（取值见 src/verify/bundlers/ 里登记的适配器，目前有 vite）：
+ * @property {string|null} bundler 打包器证据（取值见 src/verify/bundlers/ 里登记的适配器，目前有 vite、webpack、vue-cli）：
  *   基线构建时记下打包器加载过的模块，静态分析说「当前构建用不到」、打包器却加载了的，判 unknown，不删。
  *   同时能少走对半查找：这类文件不删，第一轮就更容易通过。null = 不启用（没有默认值：要知道项目用的是什么打包器）
  * @property {string|string[]|null} bundlerConfig 打包器的配置文件，相对仓库根目录；monorepo 里有多个应用时写数组。

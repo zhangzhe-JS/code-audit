@@ -18,8 +18,10 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import * as vite from './vite.js'
+import * as webpack from './webpack.js'
+import * as vueCli from './vue-cli.js'
 
-export const BUNDLERS = Object.freeze({ vite })
+export const BUNDLERS = Object.freeze({ vite, webpack, 'vue-cli': vueCli })
 
 /**
  * 在临时目录里给构建配置套一层

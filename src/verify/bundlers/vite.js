@@ -115,7 +115,7 @@ const __codeAuditOriginal = require(${JSON.stringify(originalSpec)})
 ${plugin}
 const __codeAuditDefault = __codeAuditOriginal && __codeAuditOriginal.__esModule ? __codeAuditOriginal.default : __codeAuditOriginal
 module.exports = __codeAuditOriginal && __codeAuditOriginal.__esModule
-  ? { ...__codeAuditOriginal, default: wrap(__codeAuditDefault) }
+  ? Object.defineProperty({ ...__codeAuditOriginal, default: wrap(__codeAuditDefault) }, '__esModule', { value: true }) // 展开会丢掉不可枚举的 __esModule
   : wrap(__codeAuditDefault)
 `
   }

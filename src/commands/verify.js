@@ -37,7 +37,7 @@ const USAGE = `用法：
   --profile  项目配置文件（必填），要写 verify 的命令，如：
                verify: { build: 'npm run build', test: 'npm test', bundler: 'vite' }
              命令必须能无人值守跑完；超时默认 30 分钟，可以写 timeoutSeconds
-             bundler 可选（目前支持 vite），配置文件不在默认位置时写 bundlerConfig
+             bundler 可选（vite、webpack、vue-cli），配置文件不在默认位置时写 bundlerConfig
   --in       history 输出的数据（data.json）；用数据里记录的提交
   --out      结果写到这个文件；不传就打印出来。不能写在被分析的仓库里，文件不能已存在
   --rev      试跑基线时用哪个提交，默认 HEAD（带 --in 时用数据里的提交）

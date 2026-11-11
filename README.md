@@ -243,7 +243,7 @@ node bin/code-audit.js history --root ../my-app --file src/utils/old.js
 ```js
 verify: {
   build: 'npm run build', test: 'npm test', timeoutSeconds: 1800,  // 命令没有默认值；不能停下来等人输入
-  bundler: 'vite'                                                  // 可选：打包器证据（目前支持 vite）
+  bundler: 'vite'                                                  // 可选：打包器证据（vite、webpack、vue-cli）
 }
 ```
 
@@ -255,14 +255,23 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js [--k
 
 基线结果会缓存起来（`~/.cache/code-audit`，按提交、命令、依赖状态区分）：试跑通过后，接下来的实删验证、以及之后的重跑都直接复用，不再跑一遍。构建受环境变量影响、或怀疑缓存不对时加 `--fresh`。
 
-**打包器证据**（`bundler: 'vite'`）：基线构建时顺便记下打包器实际加载过的模块，不多跑构建。做法是在临时目录里给 `vite.config.*` 套一层、追加一个只记录模块的插件（项目文件不改，构建产物不变）。配置文件不在默认位置时写 `bundlerConfig`，monorepo 里多个应用写数组。用法只有一个方向：
+**打包器证据**（`bundler: 'vite'`）：基线构建时顺便记下打包器实际加载过的模块，不多跑构建。做法是在临时目录里给构建配置套一层、追加一个只记录模块的插件（项目文件不改，构建产物不变）。配置文件不在默认位置时写 `bundlerConfig`，monorepo 里多个应用写数组。
+
+| bundler | 套哪个文件 | 说明 |
+|---|---|---|
+| `vite` | `vite.config.*` | 插件只在 build 时生效 |
+| `webpack` | `webpack.config.*`（webpack-cli 的顺序） | webpack 3/4/5；导出对象、数组、函数、Promise 都认。老项目由脚本 require 的 `build/webpack.prod.conf.js` 写进 `bundlerConfig` |
+| `vue-cli` | `vue.config.js` / `.cjs` / `.mjs` | 在 chainWebpack 里加插件，原来的 chainWebpack 照常跑；写在 package.json "vue" 字段里的套不上 |
+
+其他基于 webpack 的脚手架（CRA、umi 等）只要构建时读的是一个 webpack 配置文件，就用 `webpack` 加 `bundlerConfig`；配置藏在脚手架内部的拿不到。用法只有一个方向：
 - 静态分析说「当前构建用不到」（`dead`、`dead-only-ref`、`test-only`、`dormant`、`pending`），打包器却加载了 → 判 `unknown`（静态分析漏看了引用，如 glob、插件、别名），要删的不删。这类文件删了多半构建失败，提前拿掉就不用多跑几轮去找
 - 打包器没加载的不拿来判死：测试、脚本、别的构建模式可能在用
 - 证据和缓存都是锦上添花，出问题只提示、照常验证：套不上（配置文件不在这个提交里）、套了后构建失败（如构建前的 lint 检查到了生成的文件，会自动撤掉重跑；撤掉还失败就说明是项目本身的问题）、缓存目录写不了
 
 能力边界：
 - 只看得到经过套好的配置的构建：构建命令用 JS API 传内联配置、或用了没写进 `bundlerConfig` 的配置文件，拿不到列表（会提示）
-- Vite 给 Web Worker 单独打的包不经过主配置的插件，worker 里加载的文件不在列表里
+- Vite 给 Web Worker 单独打的包不经过主配置的插件，worker 里加载的文件不在列表里；webpack 的子编译（html-webpack-plugin 的模板等）同样不记
+- webpack 只有生产模式（或开了 optimization.usedExports）才算导出用没用到，开发模式构建只有模块列表
 - lint 规则、tsconfig 按文件名 `vite.config.ts` 配置的项目，改名后的原配置可能不过检查，会走「撤掉重跑」，这次就没有证据
 - 只在有要删的文件（`dead`、`dead-only-ref`）时才跑；只有 `test-only` 这类时不会专门为它跑构建
 - 缓存键不含环境变量；构建受环境变量影响时加 `--fresh`
@@ -438,4 +447,9 @@ git status --short       # 确认列表里没有上面这些目录
 | M8 | verify 提速：打包器证据（vite）、基线缓存 |
 | M9 | 接入另外两个项目（共 4 个） |
 | M10 | 接口维度：api（规则 + 覆盖报告）、--history、api-report（风险分级） |
-| 以后 | 导出维度（含 internal）、接口的菜单归属、查询服务 / MCP / CI、webpack 适配器 |
+| M11 | 接口的菜单归属 |
+| M12 | 导出维度（含 internal、tree-shaking 证据） |
+| M13 | 改之前先看风险：check、query、mcp、CI 模板 |
+| M14 | context：生成 profile 的材料（交给任意大模型） |
+| M15 | 打包器证据：webpack、vue-cli 适配器 |
+| 以后 | 菜单归属按名字往上追、Pinia / Vuex action 粒度、接入大模型生成规则 |
