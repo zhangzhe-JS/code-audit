@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-11
-- 测试：502 个，全部通过（`npm test`）
+- 测试：507 个，全部通过（`npm test`）
 
 ---
 
@@ -30,6 +30,7 @@
 | M9 | 接入另外两个项目（共 4 个：1 个 Vue2 + JS、3 个 Vue3 + TS） | ✅ 全流程跑通（只读）；router-view 插槽的 :is 不再当盲区（dbcddbb） |
 | M10 | 接口维度：api（规则 + 扫描 + 覆盖报告）、--history、api-report（风险分级） | ✅ 4 个项目和 479 条人工核对结果对比完成 |
 | M11 | 菜单归属：在用的接口是哪些菜单在用，报告加「使用菜单」 | ✅ 4 个项目和人工核对的菜单路径对比完成 |
+| M12 | 导出维度：exports（没人用的导出，8 种状态）、--history、exports-report | ✅ 4 个项目跑通，抽查核对 |
 
 ---
 
@@ -587,6 +588,47 @@ profile 新增 `menus`（菜单名 + 页面入口文件，global 菜单单独标
 Vuex action 的派发方漏算；工具这边的不精确是第一步之后按文件连，某个工具文件被很多页面引用时会多算使用方（偏保守）。
 迭代过程中修过：穿过请求工具 / 启动配置摊到所有菜单（改为碰到 global 就停）、汇总导出文件摊到所有页面（改为按名字追）、
 `<script setup>` 默认导入断链、Vuex 按命名空间摊到所有用到 common 模块的页面（改为按 action）、同文件封装漏算。每处反向检查过。
+
+## M12 导出维度 ✅
+
+`code-audit exports`：从入口走得到的文件里，找出没人用的导出，判 unknown / external / pending / dormant / test-only / internal / dead-only-ref / dead，
+每条写明依据和建议；`--history` 查失去外部引用的提交；`exports-report` 输出 Markdown 和 CSV。
+
+### 做法（`src/exports/`）
+
+- 复用文件维度的 scan，knip 同时报没人用的导出：只用项目入口跑一次、加上测试入口跑一次，两次一比得到 test-only
+- 复用接口维度的 extractFile：导出对应的顶层名字、同文件里谁引用谁（usedBindings 传递），区分 internal / dead-only-ref / dead
+- 复用文件维度的模块：outsideCode（图外代码的 import → external）、findCommentRefs（注释里写着路径、同一行有名字 → dormant）、
+  findBranchRefs（分支上的文件 import 了这个名字，或分支改过这个文件并新加了调用 → pending；分支上的测试文件不算）、
+  findDynamicLoads（落在动态加载范围里 → unknown）、findAutoImports / findNameUses（自动导入用到的不算候选）
+- 历史复用接口维度的 traceDefinition
+
+### 实现时发现并修复
+
+| 问题 | 修复 |
+|---|---|
+| knip 把 enum 归在 types 里报，导出里看不到 | 导出模式加上 types，只保留有运行时声明的名字（type / interface 过滤掉） |
+| 自动导入按文件判断「用到了」：同文件登记了多个名字，用到一个就都跳过 | 按名字逐个找 |
+| 分支上测试文件里的引用被判 pending | 排除测试文件；用路径 glob（branch-refs 里的 globToRegExp 是给分支名用的，`**` 至少要一层目录，匹配不上 tests/x.test.ts） |
+| 只看分支上别的文件的 import，没看分支改过这个文件本身 | 分支版本里有当前版本没有的调用方才判 pending（原来就有的引用两边一样，不算） |
+| 没写 testEntries 时只有测试在用的导出判成 dead，只在命令行提示 | 报告里也写明 |
+
+每处反向检查过。测试用一个写法和常见 Vue 项目不同的 TS 项目（源码目录 app、enum、class、汇总转出、vite 配置引用、动态加载、自动导入、分支）。
+
+### tree-shaking 证据（`exports --verify`）
+
+- vite 适配器的插件在 generateBundle 里多记一份各模块的 renderedExports / removedExports（不多跑构建），记录格式改为 `{ ids, exports }`，老格式照认
+- 多次构建：有一次保留就算保留；每次（产物里有这个模块的）都摇掉才算摇掉
+- 基线缓存带上导出记录；老格式的缓存（没有导出记录）当没有缓存，重跑一次
+- 只用一个方向：dead / dead-only-ref / test-only 构建却保留了 → unknown；摇掉了 → 佐证。internal 不比较（只在文件内用的函数会被保留）
+- 项目 C 实测：构建 16 秒，记录 130 个文件的导出，44 个候选构建也摇掉了（佐证），没有矛盾的
+
+### 查历史提速
+
+- 导出维度一个项目几百个候选，查历史要 6 分多钟。量出来瓶颈是 git log -G：带 80 个名字的正则一批就要 70 秒（扫整个历史），分了 6 批
+- 名字多（超过 10 个）时不再用 -G，直接取主线上所有改过源码的提交，逐个取 diff（每个十几毫秒，有缓存），建「单词 → 提交」的索引按名字找；
+  读历史文件、去注释也缓存
+- 项目 A：导出维度 380 秒 → 34 秒，接口维度 124 秒 → 51 秒，结果逐条一致
 
 ### 能力边界
 

@@ -50,6 +50,7 @@ export function describe(r) {
  * @typedef {object} Baseline
  * @property {Record<string, import('./run-command.js').CommandResult>} results
  * @property {Set<string>|null} modules  打包器加载过的源码文件；没启用打包器证据、或没拿到时为 null
+ * @property {Map<string, {rendered: Set<string>, removed: Set<string>}>|null} exports  各文件 tree-shaking 后保留 / 摇掉的导出（导出维度用）；没拿到时为 null
  * @property {number} builds   打包器记录了几次构建（没启用时为 0）
  * @property {string|null} cachedAt 复用的缓存是什么时候的；现跑的为 null
  * @property {string|null} bundlerDropped 启用了打包器证据却没有的原因（套不上、套了构建失败撤掉了）；没有为 null
@@ -90,7 +91,12 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
 
   const key = baselineKey({ commit: ws.commit, verify, deps: depsFingerprint(root, ws.deps) })
   if (useCache) {
-    const hit = safely(() => readBaseline(key, cacheDir), log)
+    let hit = safely(() => readBaseline(key, cacheDir), log)
+    // 老版本存的缓存没有导出记录：拿到了模块列表却没有 exports 的，当没有缓存，重跑一遍（只有这一次）
+    if (hit && hit.modules && hit.exports === undefined) {
+      log('有基线缓存，但是老格式（没有 tree-shaking 的导出记录），重跑一遍')
+      hit = null
+    }
     if (hit) {
       log(`复用 ${age(hit.createdAt)}的基线（同一个提交、同样的命令和依赖），不再跑一遍。要重跑加 --fresh`)
       for (const [step, r] of Object.entries(hit.results)) log(`  ${step}：${describe(r)}`)
@@ -102,6 +108,7 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
       return {
         results: hit.results,
         modules: hit.modules ? new Set(hit.modules) : null,
+        exports: hit.exports ? new Map(Object.entries(hit.exports).map(([f, e]) => [f, { rendered: new Set(e.rendered), removed: new Set(e.removed) }])) : null,
         builds: hit.builds,
         cachedAt: hit.createdAt,
         bundlerDropped: hit.bundlerDropped ?? bundlerDropped
@@ -111,11 +118,13 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
 
   let results = await runSteps({ cwd: ws.dir, verify, run, logDir, log })
   let modules = null
+  let exports = null
   let builds = 0
   if (restore) {
     const collected = collectModules(outDir, workDirsOf(ws.dir))
     builds = collected.builds
     modules = builds > 0 ? collected.files : null
+    exports = builds > 0 ? collected.exports : null
     if (collected.bad.length > 0) log(`  有 ${collected.bad.length} 份模块记录读不了（构建中途被结束？），跳过`)
     // 套了配置后构建失败：撤掉重跑，看是不是它引起的（构建前的 lint、类型检查检查到了生成的文件等）
     if (results.build && !results.build.ok) {
@@ -123,6 +132,7 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
       log('  套了打包器配置后构建失败：撤掉这一层重跑，确认是不是它引起的')
       restore()
       modules = null
+      exports = null
       builds = 0
       results = await runSteps({ cwd: ws.dir, verify, run, logDir, log })
       if (results.build.ok) {
@@ -134,9 +144,10 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
     }
   }
   if (!results.build || results.build.ok) {
-    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, builds, bundlerDropped }, cacheDir), log)
+    const savedExports = exports ? Object.fromEntries([...exports].sort().map(([f, e]) => [f, { rendered: [...e.rendered].sort(), removed: [...e.removed].sort() }])) : null
+    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, exports: savedExports, builds, bundlerDropped }, cacheDir), log)
   }
-  return { results, modules, builds, cachedAt: null, bundlerDropped }
+  return { results, modules, exports, builds, cachedAt: null, bundlerDropped }
 }
 
 /** 缓存读写出错（缓存目录没有权限、磁盘满等）：提示一下，当没有缓存 */

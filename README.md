@@ -297,6 +297,34 @@ node bin/code-audit.js quarantine --root ../my-app --profile profiles/my-app.js 
 - 任何一步出错都整体撤回，目标项目回到执行前的样子：已跟踪的文件回到 HEAD，新建的 README 删掉，原来就有的 README（包括没提交的）写回原内容
 - lint 配置不自动改，计划里列出要手动加的那一行
 
+### 导出维度
+
+回答「走得到的文件里，哪些导出没人用、该怎么处理」。不用额外配置，profile 里有 entries、aliases 就能跑；写了 testEntries 才能区分只有测试在用的。
+
+```bash
+node bin/code-audit.js exports --root ../my-app --profile profiles/my-app.js --history --out reports/my-app/exports.json
+node bin/code-audit.js exports-report --in reports/my-app/exports.json --out reports/my-app/exports
+```
+
+| 状态 | 判定 | 建议 |
+|---|---|---|
+| `unknown` | 所在文件在路径确定不了的动态加载范围里 | 人工确认（确认后写进 reviewedDynamicLoads） |
+| `external` | 构建配置、脚本等源码目录外的代码 import 了这个名字 | 保留 |
+| `pending` | 没合并的分支里有文件 import 它，或分支改过这个文件、新加了对它的调用 | 等分支合并或关闭 |
+| `dormant` | 在用的代码里有注释掉的引用 | 保留 |
+| `test-only` | 只有测试 import 它 | 确认业务还要不要，删就连同测试 |
+| `internal` | 外部没人用，同文件里在用的代码调用它 | 只去掉 export |
+| `dead-only-ref` | 同文件里只有同样没人用的代码引用它 | 一起删 |
+| `dead` | 同文件里也没人引用；或没人引用的转出（export { a } from） | 删掉声明 / 转出 |
+
+- 用 knip 报出没人用的导出（含 enum；type、interface 这种只在编译时存在的不算），同文件引用用 oxc 解析
+- 自动导入（unplugin-auto-import）登记、并按名字用到的本地函数不算候选（knip 看不到这种用法）
+- 单文件组件的导出都算在用（模板可以直接用）；CommonJS 的导出不分析（偏保守）
+- `--history`：在哪个提交失去了外部引用；从没被别的文件引用过的记定义提交
+- `--verify`：在临时目录里跑一次构建（verify 的基线，有缓存就复用），用 tree-shaking 的结果（Rollup 的 renderedExports / removedExports）核对：
+  静态分析说没人用、构建却保留了的改判 unknown；构建也摇掉了的记成佐证（不单凭它判死）。要在 profile 的 verify 里写 build 和 bundler
+- 只看从入口走得到的文件；走不到的文件由文件维度的 scan 处理
+
 ### 接口维度
 
 回答「这个接口（方法 + 路径）前端还在不在用、什么时候不用的」。在 profile 里写 `api` 规则，说明请求是怎么发出去的：

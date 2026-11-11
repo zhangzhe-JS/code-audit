@@ -11,9 +11,10 @@
  * - 插件只在 build 时生效（apply: 'build'），不改构建产物；dev、vitest 里不起作用
  * - 构建前会跑 lint、类型检查的项目，会检查到这个生成的文件：开头关掉 eslint 和 TS 检查。
  *   还是过不了的话，verify 会撤掉这一层重跑基线（baseline.js），只是没有打包器证据
- * - 每次构建写一个 JSON 文件到 outDir（一条命令里可能有多次构建）：构建里加载过的所有模块 id
- *   取 this.getModuleIds()（整个模块图，包括被 tree-shaking 摇空的模块：删了它照样会构建失败），
+ * - 每次构建写一个 JSON 文件到 outDir（一条命令里可能有多次构建）：{ ids, exports }
+ *   ids：构建里加载过的所有模块 id，取 this.getModuleIds()（整个模块图，包括被 tree-shaking 摇空的模块：删了它照样会构建失败），
  *   再并上产物里各 chunk 的模块（老版本 rollup、rolldown 没有 getModuleIds 时兜底）
+ *   exports：产物里各模块 tree-shaking 后保留 / 摇掉的导出（Rollup 的 renderedExports / removedExports），导出维度用
  */
 import { existsSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
@@ -76,13 +77,20 @@ export function wrapper(originalSpec, outDir, ext) {
       for (const id of this.getModuleIds()) ids.add(id)
     },
     generateBundle(_options, bundle) {
+      const exports = {}
       for (const out of Object.values(bundle)) {
         if (out.type !== 'chunk') continue
         for (const id of out.moduleIds ?? Object.keys(out.modules ?? {})) ids.add(id)
+        for (const [id, m] of Object.entries(out.modules ?? {})) {
+          if (!m || !Array.isArray(m.renderedExports)) continue
+          const e = exports[id] ?? (exports[id] = { rendered: [], removed: [] })
+          e.rendered.push(...m.renderedExports)
+          e.removed.push(...(m.removedExports ?? []))
+        }
       }
       __codeAuditFs.mkdirSync(${JSON.stringify(outDir)}, { recursive: true })
       const name = process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.json'
-      __codeAuditFs.writeFileSync(__codeAuditPath.join(${JSON.stringify(outDir)}, name), JSON.stringify([...ids]))
+      __codeAuditFs.writeFileSync(__codeAuditPath.join(${JSON.stringify(outDir)}, name), JSON.stringify({ ids: [...ids], exports }))
     }
   }
 }

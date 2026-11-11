@@ -103,7 +103,7 @@ export function traceDefinition({ root, rev, file, fn, config, maxCommits = 40, 
   let seen = 0
   let capped = false
   let stillUsedBy = null
-  for (const c of ctx.commits) {
+  for (const c of ctx.commitsFor ? ctx.commitsFor(fn) : ctx.commits) {
     const files = ctx.removed(c)
     if (!files.some((f) => f.removed.some((l) => word.test(l)))) continue
     if (++seen > maxCommits) {
@@ -113,9 +113,8 @@ export function traceDefinition({ root, rev, file, fn, config, maxCommits = 40, 
     // 删掉的行之后文件里还引用着它（只是改了这一行，比如加了个参数）：不算失去引用
     // 同一个文件：除了定义行还出现这个名字；别的文件：还 import 着定义所在的模块并且用到这个名字
     const stillRefers = (path) => {
-      const after = readAt(root, c, path)
-      if (after === null) return false
-      const code = codeOf(path, after)
+      const code = readCode(root, c, path)
+      if (code === null) return false
       const uses = code.split('\n').some((l) => word.test(l) && !declaration.test(l) && !/^\s*import\b/.test(l))
       if (path === file) return uses
       return uses && importsTarget({ code, from: path, file, fn, aliases: config.aliases }) !== null
@@ -133,9 +132,9 @@ export function traceDefinition({ root, rev, file, fn, config, maxCommits = 40, 
         stillUsedBy ??= path
         continue
       }
-      const before = readAt(root, `${c}^1`, path)
+      const before = readCode(root, `${c}^1`, path)
       if (before === null) continue
-      const imp = importsTarget({ code: codeOf(path, before), from: path, file, fn, aliases: config.aliases })
+      const imp = importsTarget({ code: before, from: path, file, fn, aliases: config.aliases })
       if (imp === 'module') return { lostRef: withBranch(root, { commit: commitInfo(root, c), from: path, text: hit.trim().slice(0, 200), weak: false }, fn), introduced: null }
       if (imp === 'name' && !weak) weak = withBranch(root, { commit: commitInfo(root, c), from: path, text: hit.trim().slice(0, 200), weak: true }, fn)
     }
@@ -196,11 +195,18 @@ function branchCommit(root, c, from, fn) {
 /**
  * 候选提交（主线上改动过这些名字的，新的在前）和每个提交删掉的行（缓存）
  */
-function createContext({ root, rev, config, names }) {
+/** 名字不超过这么多时用 git log -G 先筛候选提交；多了直接取所有改过源码的提交 */
+const FEW_NAMES = 10
+
+export function createContext({ root, rev, config, names }) {
   const pathspecs = config.sourceRoots.flatMap((dir) => config.extensions.map((e) => `:(glob)${dir}/**/*${e}`))
   let commits = []
-  if (names.length > 0) {
-    // 名字太多时分批，避免正则过长
+  if (names.length > FEW_NAMES) {
+    // 名字多：git log -G 带几十个名字的正则要把整个历史扫一遍（几百个名字要好几分钟），
+    // 不如直接取主线上所有改过源码的提交，逐个取 diff（每个十几毫秒，有缓存），再按单词索引找
+    commits = git(root, ['log', rev, '--first-parent', '--format=%H', '--', ...pathspecs]).split('\n').filter(Boolean)
+  } else if (names.length > 0) {
+    // 名字少：-G 先筛出候选提交更快
     const set = new Set()
     for (let i = 0; i < names.length; i += 80) {
       const alt = names.slice(i, i + 80).map(escapeRe).join('|')
@@ -227,7 +233,25 @@ function createContext({ root, rev, config, names }) {
     }
     return cache.get(c)
   }
-  return { commits, removed }
+  // 单词 → 删除行里出现过它的提交（按 commits 的顺序）。第一次用到时建一次：
+  // 每个名字都把几千个提交的删除行扫一遍太慢（导出维度几百个名字要几分钟），建了索引只看出现过它的提交
+  let index = null
+  const commitsFor = (name) => {
+    if (!index) {
+      index = new Map()
+      for (const c of commits) {
+        const words = new Set()
+        for (const f of removed(c)) for (const l of f.removed) for (const m of l.matchAll(/[A-Za-z_$][\w$]*/g)) words.add(m[0])
+        for (const w of words) {
+          const list = index.get(w)
+          if (list) list.push(c)
+          else index.set(w, [c])
+        }
+      }
+    }
+    return index.get(name) ?? []
+  }
+  return { commits, removed, commitsFor }
 }
 
 /** 解析 git diff -U0：每个文件删掉的行 */
@@ -257,12 +281,36 @@ function stripLineComment(l) {
   return l.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '')
 }
 
+/** 读某个提交里的文件，去掉注释（结果也缓存） */
+const codeCache = new Map()
+function readCode(root, commit, path) {
+  const key = `${root}\0${commit}\0${path}`
+  if (codeCache.has(key)) return codeCache.get(key)
+  const raw = readAt(root, commit, path)
+  const code = raw === null ? null : codeOf(path, raw)
+  if (codeCache.size >= READ_CACHE_MAX) codeCache.clear()
+  codeCache.set(key, code)
+  return code
+}
+
+/**
+ * 读某个提交里的文件。按「仓库 + 提交 + 路径」缓存：查很多个名字时，同一个提交里的同一个文件会被反复读
+ * （导出维度一个项目几百个候选，不缓存要几分钟）。缓存有上限，满了清空
+ */
+const readCache = new Map()
+const READ_CACHE_MAX = 5000
 function readAt(root, commit, path) {
+  const key = `${root}\0${commit}\0${path}`
+  if (readCache.has(key)) return readCache.get(key)
+  let content
   try {
-    return git(root, ['show', `${commit}:${path}`], { raw: true })
+    content = git(root, ['show', `${commit}:${path}`], { raw: true })
   } catch {
-    return null
+    content = null
   }
+  if (readCache.size >= READ_CACHE_MAX) readCache.clear()
+  readCache.set(key, content)
+  return content
 }
 
 /** 文件在删之前有没有 import 定义所在的文件：module = 按路径解析到了；name = 只是 import 了同名的名字 */

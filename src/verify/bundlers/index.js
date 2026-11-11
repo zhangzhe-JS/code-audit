@@ -11,7 +11,8 @@
  *   instrument({ dir, outDir, config }) → { config, restore }
  *     dir：临时目录；config：配置文件（相对 dir），null 时按打包器自己的规则找；找不到就抛错
  *     只改临时目录里的文件；restore() 把改过的放回原样
- *   构建时每次构建往 outDir 写一个 JSON 文件：加载过的模块 id 数组（绝对路径，可以带 ?查询参数，虚拟模块以 \0 开头）
+ *   构建时每次构建往 outDir 写一个 JSON 文件：{ ids: 加载过的模块 id（绝对路径，可以带 ?查询参数，虚拟模块以 \0 开头），
+ *   exports?: { 模块 id: { rendered: 保留的导出, removed: 摇掉的导出 } } }；只写 id 数组的老格式也认
  *   collectModules 统一读取、换成相对路径
  */
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
@@ -59,19 +60,29 @@ export function instrumentAll({ type, dir, outDir, configs }) {
  * 读出一次构建记录的模块，换成相对仓库根目录的源码文件；读完清空，下一次构建重新记
  * @param {string} outDir
  * @param {string[]} workDirs 临时目录的各种写法（macOS 上 /var 和 /private/var）
- * @returns {{builds: number, files: Set<string>, bad: string[]}} builds：记录了几次构建；0 表示构建没经过套好的配置；bad：读不了的记录
+ * @returns {{builds: number, files: Set<string>, bad: string[], exports: Map<string, {rendered: Set<string>, removed: Set<string>}>}}
+ *   builds：记录了几次构建；0 表示构建没经过套好的配置；bad：读不了的记录；
+ *   exports：文件 → 保留 / 摇掉的导出。多次构建时，有一次保留就算保留；每次（产物里有这个模块的）都摇掉才算摇掉
  */
 export function collectModules(outDir, workDirs) {
   const files = new Set()
   let builds = 0
   const bad = []
+  const exports = new Map()
+  const seenIn = new Map() // 文件 → 产物里有它的构建次数
+  const removedCount = new Map() // 文件#名字 → 摇掉它的构建次数
   if (existsSync(outDir)) {
     for (const name of readdirSync(outDir).filter((n) => n.endsWith('.json')).sort()) {
-      let ids
+      let record
       try {
-        ids = JSON.parse(readFileSync(join(outDir, name), 'utf8'))
+        record = JSON.parse(readFileSync(join(outDir, name), 'utf8'))
       } catch {
         bad.push(name) // 构建被超时结束时可能写了一半：这次构建的记录不完整，跳过（只会少救，不会多判死）
+        continue
+      }
+      const ids = Array.isArray(record) ? record : Array.isArray(record?.ids) ? record.ids : null
+      if (!ids) {
+        bad.push(name)
         continue
       }
       builds++
@@ -79,10 +90,33 @@ export function collectModules(outDir, workDirs) {
         const f = toRepoFile(id, workDirs)
         if (f) files.add(f)
       }
+      const perFile = new Map()
+      for (const [id, e] of Object.entries((!Array.isArray(record) && record.exports) || {})) {
+        const f = toRepoFile(id, workDirs)
+        if (!f || !e) continue
+        const cur = perFile.get(f) ?? { rendered: new Set(), removed: new Set() }
+        for (const n of e.rendered ?? []) cur.rendered.add(n)
+        for (const n of e.removed ?? []) cur.removed.add(n)
+        perFile.set(f, cur)
+      }
+      for (const [f, cur] of perFile) {
+        seenIn.set(f, (seenIn.get(f) ?? 0) + 1)
+        const all = exports.get(f) ?? { rendered: new Set(), removed: new Set() }
+        for (const n of cur.rendered) all.rendered.add(n)
+        exports.set(f, all)
+        for (const n of cur.removed) removedCount.set(`${f}#${n}`, (removedCount.get(`${f}#${n}`) ?? 0) + 1)
+      }
     }
     rmSync(outDir, { recursive: true, force: true })
   }
-  return { builds, files, bad }
+  for (const [key, n] of removedCount) {
+    const at = key.lastIndexOf('#')
+    const f = key.slice(0, at)
+    const name = key.slice(at + 1)
+    const e = exports.get(f)
+    if (n === seenIn.get(f) && !e.rendered.has(name)) e.removed.add(name)
+  }
+  return { builds, files, bad, exports }
 }
 
 /**

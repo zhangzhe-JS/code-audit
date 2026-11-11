@@ -233,7 +233,8 @@ export function runKnip({ knip, root, config, exports = false }) {
           knip.bin,
           '--directory', realRoot,
           '--config', configFile,
-          '--include', exports ? 'files,exports,nsExports' : 'files',
+          // types：knip 把 enum 归在类型里报；调用方只保留有运行时声明的名字（type / interface 自然过滤掉）
+          '--include', exports ? 'files,exports,nsExports,types' : 'files',
           '--reporter', 'json',
           '--output-file', `json=${resultFile}`,
           '--no-exit-code',
@@ -292,7 +293,8 @@ export function parseUnusedFiles(result) {
 
 /**
  * 从 knip 的 JSON 结果里取出没人用的导出：文件 → 导出名
- * 只在从入口走得到的文件里报；nsExports（以命名空间导入、却没用到的成员）也算没人用
+ * 只在从入口走得到的文件里报；nsExports（以命名空间导入、却没用到的成员）也算没人用；
+ * types 也收进来（enum 在这一类里），type / interface 由调用方按「有没有运行时声明」过滤
  * @param {{issues?: {file: string, exports?: {name: string}[], nsExports?: {name: string}[]}[]}} result
  * @returns {Map<string, Set<string>>}
  */
@@ -300,7 +302,7 @@ export function parseUnusedExports(result) {
   if (!Array.isArray(result?.issues)) throw new Error('knip 的结果格式不认识：没有 issues 数组')
   const map = new Map()
   for (const issue of result.issues) {
-    for (const key of ['exports', 'nsExports']) {
+    for (const key of ['exports', 'nsExports', 'types']) {
       const list = issue[key]
       if (!Array.isArray(list) || list.length === 0) continue
       if (typeof issue.file !== 'string' || issue.file === '' || issue.file.startsWith('/')) {

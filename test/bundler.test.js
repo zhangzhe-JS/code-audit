@@ -53,10 +53,12 @@ test('vite 适配器：套一层后原样返回配置，只在 plugins 末尾加
   assert.equal(mod.default.plugins[1].apply, 'build') // dev、vitest 里不起作用
 
   // getModuleIds 和产物里的 chunk 都收
-  await runPlugins(mod.default, [join(tree, 'src/a.js')], { 'x.js': { type: 'chunk', modules: { [join(tree, 'src/b.vue')]: {} } }, 'y.css': { type: 'asset' } })
+  await runPlugins(mod.default, [join(tree, 'src/a.js')], { 'x.js': { type: 'chunk', modules: { [join(tree, 'src/b.vue')]: { renderedExports: ['default'], removedExports: ['unused'] } } }, 'y.css': { type: 'asset' } })
   const files = readdirSync(out)
   assert.equal(files.length, 1)
-  assert.deepEqual(JSON.parse(readFileSync(join(out, files[0]), 'utf8')).sort(), [join(tree, 'src/a.js'), join(tree, 'src/b.vue')])
+  const record = JSON.parse(readFileSync(join(out, files[0]), 'utf8'))
+  assert.deepEqual(record.ids.sort(), [join(tree, 'src/a.js'), join(tree, 'src/b.vue')])
+  assert.deepEqual(record.exports, { [join(tree, 'src/b.vue')]: { rendered: ['default'], removed: ['unused'] } }, 'tree-shaking 保留 / 摇掉的导出')
 })
 
 test('vite 适配器：导出函数、异步函数时形状不变；CommonJS 配置也能套', async (t) => {
@@ -107,13 +109,29 @@ test('toRepoFile、collectModules：去掉查询参数和虚拟模块，依赖�
 
   const dir = tempDir(t)
   const out = join(dir, 'm')
-  assert.deepEqual(collectModules(out, dirs), { builds: 0, files: new Set(), bad: [] })
+  assert.deepEqual(collectModules(out, dirs), { builds: 0, files: new Set(), bad: [], exports: new Map() })
   mkdirSync(out)
   writeFileSync(join(out, '1.json'), JSON.stringify(['/var/w/tree/src/a.js', '\0x']))
   writeFileSync(join(out, '2.json'), JSON.stringify(['/private/var/w/tree/src/b.js', '/var/w/tree/src/a.js?raw']))
   writeFileSync(join(out, '3.json'), '["/var/w/tree/src/c.js", "/var/w') // 构建被结束时写了一半
-  assert.deepEqual(collectModules(out, dirs), { builds: 2, files: new Set(['src/a.js', 'src/b.js']), bad: ['3.json'] })
+  assert.deepEqual(collectModules(out, dirs), { builds: 2, files: new Set(['src/a.js', 'src/b.js']), bad: ['3.json'], exports: new Map() })
   assert.equal(existsSync(out), false)
+})
+
+test('collectModules：tree-shaking 的导出记录——有一次构建保留就算保留；每次（有这个模块的）构建都摇掉才算摇掉；老格式也认', (t) => {
+  const dirs = ['/w/tree']
+  const dir = tempDir(t)
+  const out = join(dir, 'm')
+  mkdirSync(out)
+  writeFileSync(join(out, '1.json'), JSON.stringify({ ids: ['/w/tree/src/a.js'], exports: { '/w/tree/src/a.js': { rendered: ['keep'], removed: ['x', 'y'] }, '/w/tree/src/b.js': { rendered: [], removed: ['z'] } } }))
+  writeFileSync(join(out, '2.json'), JSON.stringify({ ids: ['/w/tree/src/a.js'], exports: { '/w/tree/src/a.js': { rendered: ['x'], removed: ['y'] } } }))
+  writeFileSync(join(out, '3.json'), JSON.stringify(['/w/tree/src/c.js'])) // 老格式：只有 id
+  const r = collectModules(out, dirs)
+  assert.equal(r.builds, 3)
+  assert.deepEqual([...r.exports.get('src/a.js').rendered].sort(), ['keep', 'x'], 'x 第二次构建保留了')
+  assert.deepEqual([...r.exports.get('src/a.js').removed], ['y'], '两次都摇掉的才算摇掉')
+  assert.deepEqual([...r.exports.get('src/b.js').removed], ['z'])
+  assert.ok(r.files.has('src/c.js'))
 })
 
 // ---------- 基线缓存 ----------

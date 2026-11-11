@@ -74,13 +74,14 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   // dynamicImports：写死路径的 import('...')（异步组件等），菜单归属用来连引用
   // storeUses：用到的 Vuex 命名空间（dispatch('ns/x')、mapActions('ns') 等）；storeModules：这个文件里注册的 Vuex 模块（modules: { ns: 模块 }）
   // storeActionUses：用到的具体 action（ns/action）；storeActions：这个文件里的 Vuex actions 各自引用了哪些导入的名字
-  const result = { path, sites: [], suspects: [], bindings: new Map(), imports: [], reexports: [], importUses: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
+  // declLines：顶层名字声明在第几行（导出维度的报告用）；reexports 里也记下行号
+  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
 
   if (program) {
-    collectTopLevel(program, result)
+    collectTopLevel(program, result, lineOf)
     collectStoreActions(program, result, parser.visitorKeys)
     const consts = topLevelConsts(program)
     walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys: parser.visitorKeys })
@@ -160,8 +161,12 @@ function moduleName(node) {
   return node.type === 'Identifier' ? node.name : node.type === 'Literal' ? String(node.value) : null
 }
 
-function collectTopLevel(program, result) {
+function collectTopLevel(program, result, lineOf = () => 0) {
   for (const node of program.body) {
+    const line = lineOf(node.start)
+    const decl = node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration' ? node.declaration : node
+    for (const n of declNames(decl)) if (!result.declLines.has(n)) result.declLines.set(n, line)
+    if (node.type === 'ExportDefaultDeclaration' && !result.declLines.has('default')) result.declLines.set('default', line)
     if (node.type === 'ImportDeclaration') {
       if (node.importKind === 'type') continue
       result.imports.push({
@@ -174,7 +179,7 @@ function collectTopLevel(program, result) {
     } else if (node.type === 'ExportNamedDeclaration') {
       if (node.exportKind === 'type') continue
       if (node.source) {
-        for (const s of node.specifiers) result.reexports.push({ source: node.source.value, imported: moduleName(s.local), exported: moduleName(s.exported) })
+        for (const s of node.specifiers) result.reexports.push({ source: node.source.value, imported: moduleName(s.local), exported: moduleName(s.exported), line })
       } else if (node.declaration) {
         for (const n of declNames(node.declaration)) binding(result, n).exported.add(n)
       } else {
