@@ -120,6 +120,23 @@ test('verifyReport：真的删掉再跑，能删的通过；删了会出问题�
   assert.ok(logs.some((l) => /报错里认出/.test(l)))
 })
 
+test('verifyReport：重新验证时旧的结论作废，轮数用完没验证到的 verify 清空，不沿用上次的 passed', async (t) => {
+  const repo = projectRepo()
+  t.after(() => repo.cleanup())
+  const data = dataFor(repo)
+  const stale = { rev: data.project.rev, build: { ok: true, newWarnings: ['上一次'] }, test: { newFailures: [] }, passed: true }
+  for (const i of data.items) i.verify = structuredClone(stale)
+  const { data: out, summary } = await verifyReport({ data, root: repo.root, config, maxRounds: 1 })
+  assert.equal(summary.passed, 0)
+  for (const i of out.items) {
+    const old = i.verify?.build.newWarnings[0] === '上一次'
+    if (i.status === 'external') assert.ok(old, '不验证的不动')
+    else assert.ok(!old && i.verify?.passed !== true, i.target)
+  }
+  assert.ok(out.items.some((i) => i.verify === null))
+  assert.deepEqual(validate(out), [])
+})
+
 test('verifyReport：基线构建就失败时报错；没有要验证的文件时不准备临时目录', async (t) => {
   const repo = projectRepo()
   t.after(() => repo.cleanup())

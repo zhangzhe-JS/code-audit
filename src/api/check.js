@@ -36,27 +36,36 @@ export function compareApi({ before, after, others = [], changed = null }) {
   const menus = (e) => (e.menus?.length ? `，在用的菜单：${e.menus.join('、')}` : '')
   const where = (e) => e.definitions.map((d) => `${d.file}:${d.line}`).join('、')
 
-  // 同一个函数（文件#函数）的接口变了：地址或方法改了
+  // 同一个函数（文件#函数）的接口变了：地址或方法改了。
+  // 旧地址别处还在用、新地址以前别处就有，都照样算：调用这个函数的页面现在打的是另一个接口
   const keysOf = (r) => {
     const m = new Map()
     for (const e of r.endpoints) for (const d of e.definitions) {
       const id = `${d.file}#${d.fn}`
-      m.set(id, [...(m.get(id) ?? []), e.key])
+      const x = m.get(id) ?? { keys: [], live: false }
+      if (!x.keys.includes(e.key)) x.keys.push(e.key)
+      if (d.state === LIVE) x.live = true
+      m.set(id, x)
     }
     return m
   }
   const fnB = keysOf(before)
   const fnA = keysOf(after)
   const explained = new Set()
-  for (const [id, keysNow] of fnA) {
-    const keysThen = fnB.get(id)
-    if (!keysThen) continue
-    const gone = keysThen.filter((k) => !keysNow.includes(k) && !a.has(k))
-    const fresh = keysNow.filter((k) => !keysThen.includes(k) && !b.has(k))
+  for (const [id, now] of fnA) {
+    const then = fnB.get(id)
+    if (!then) continue
+    const gone = then.keys.filter((k) => !now.keys.includes(k))
+    const fresh = now.keys.filter((k) => !then.keys.includes(k))
     if (gone.length === 0 || fresh.length === 0) continue
-    for (const k of [...gone, ...fresh]) explained.add(k)
-    const wasLive = gone.some((k) => b.get(k)?.status === LIVE)
-    add(wasLive ? 'risk' : 'warn', 'changed-address', fresh[0], `${id.replace('#', ' 的 ')} 调用的接口从 ${gone.join('、')} 改成了 ${fresh.join('、')}：确认后端已经有新接口；旧接口${elsewhereText(gone[0])}`)
+    for (const k of gone) if (!a.has(k)) explained.add(k)
+    for (const k of fresh) if (!b.has(k)) explained.add(k)
+    const brandNew = fresh.filter((k) => !b.has(k))
+    // 新地址是这个项目以前没有的、函数又在用（改之前或改之后）：要确认后端有新接口
+    const level = brandNew.length > 0 && (now.live || then.live || gone.some((k) => b.get(k)?.status === LIVE)) ? 'risk' : 'warn'
+    const newText = brandNew.length > 0 ? '确认后端已经有新接口' : `新地址项目里本来就有（${fresh.map((k) => where(a.get(k))).join('；')}），确认参数、返回和原来一致`
+    const oldText = gone.map((k) => (a.has(k) ? `${k} 项目里别处还在用（${where(a.get(k))}）` : `${k} ${elsewhereText(k)}`)).join('；')
+    add(level, 'changed-address', fresh[0], `${id.replace('#', ' 的 ')} 调用的接口从 ${gone.join('、')} 改成了 ${fresh.join('、')}：${newText}；旧接口：${oldText}`)
   }
 
   // 新增

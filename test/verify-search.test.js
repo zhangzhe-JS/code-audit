@@ -192,6 +192,18 @@ test('compare：通过的用例变少算问题（读汇总行；没有汇总行�
   assert.equal(compare(base, { test: failing(' FAIL  t/old.test.js > broken\n Tests  1 failed | 99 passed (100)') }, '').passed, true)
 })
 
+test('compare：删后数不出通过的用例（汇总行没了、写法变了）按 0 算，退出码是 0 也算变差', () => {
+  const ok = { test: res(' Tests  10 passed (10)') }
+  const gone = compare(ok, { test: res('No test files found, exiting with code 0') }, '')
+  assert.deepEqual(gone.problems, ['通过的测试变少了：10 → 0（删后认不出通过的用例）'])
+  // 基线读汇总行，删后只剩 ✓：还按汇总行数（数不出 = 0），不拿 ✓ 的个数去比
+  assert.equal(compare(ok, { test: res('✓ a') }, '').passed, false)
+  assert.equal(compare(ok, { test: res(' Tests  10 passed (10)') }, '').passed, true)
+  // 基线本来就数不出通过数的不比
+  assert.equal(compare({ test: res('done') }, { test: res('done') }, '').passed, true)
+  assert.deepEqual(passedCount('✓ a\n Tests  3 passed', '', 'marks'), { n: 1, by: 'marks' })
+})
+
 test('passedCount：vitest、jest 的汇总行，取最后一行；认不出时返回 null', () => {
   assert.deepEqual(passedCount(' Tests  10 failed | 718 passed (728)', ''), { n: 718, by: 'summary' })
   assert.deepEqual(passedCount('Tests:       1 failed, 99 passed, 100 total', ''), { n: 99, by: 'summary' })

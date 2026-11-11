@@ -4,7 +4,7 @@
  * - 用数据里记录的提交（project.rev）：和 scan、history 看到的是同一份代码
  * - 基线构建本来就失败时无法验证，直接报错；基线测试本来就有失败的，按「新增失败」比较
  * - 删了会出问题的：status 改成 unknown，证据写上实际删掉后出的问题。静态分析没看出来的使用，不能当死代码
- * - 轮数用完还没确认的：verify 留空（未验证），状态不变
+ * - 轮数用完还没确认的：verify 留空（未验证），状态不变；上一次 verify 留下的结论先清掉，不沿用
  * - 启用了打包器证据（verify.bundler）：静态分析说当前构建用不到（CLAIMS_UNUSED）、基线构建却加载了的，判 unknown。
  *   要删的就不删了：这类文件删了多半构建失败，提前拿掉就不用走对半查找
  * - 基线有缓存就复用（cache.js）：重跑时省掉一遍构建和测试
@@ -50,6 +50,9 @@ export async function verifyReport({ data, root, config, log = () => {}, maxRoun
 
   let targets = data.items.filter((i) => i.kind === 'file' && DELETABLE.includes(i.status)).map((i) => i.target)
   const result = structuredClone(data)
+  // 上一次 verify 的结论作废：这次没来得及验证的（轮数用完、被打包器证据拿掉的）不能沿用旧的 passed，否则会进隔离计划
+  const pending = new Set(targets)
+  for (const item of result.items) if (pending.has(item.target)) item.verify = null
   if (targets.length === 0) {
     log('没有要验证的文件（dead、dead-only-ref）')
     return { data: result, summary: { targets: 0, passed: 0, failed: 0, unverified: 0, rounds: 0, bundled: [], contradicted: [] } }

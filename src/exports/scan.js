@@ -10,7 +10,7 @@
  *    - pending       没合并的分支里有文件 import 了这个名字
  *    - dormant       在用的代码里有注释掉的引用（注释里写着这个文件的路径和这个名字）
  *    - test-only     只有测试 import 它：要删就连同测试一起删
- *    - internal      外部没人用，但同文件里在用的代码调用它：只去掉 export，声明保留
+ *    - internal      外部没人用，但同文件里在用的代码调用它，或者初始化时执行了可能有副作用的调用（注册等）：只去掉 export，声明保留
  *    - dead-only-ref 同文件里只有同样没人用的代码引用它：跟着一起删
  *    - dead          同文件里也没人引用：整个声明可以删
  *    重新导出（export { a } from './x'）没人用的：判 dead，建议删掉这条转出，原文件里的声明另算
@@ -33,7 +33,7 @@ import { globToRegExp } from '../collect/glob-imports.js'
 import { findDynamicLoads, inScope } from '../collect/dynamic-imports.js'
 import { findAutoImports, findNameUses } from '../collect/auto-imports.js'
 import { git } from '../history/git.js'
-import { extractFile, loadParser } from '../api/extract.js'
+import { extractFile, loadParser, MODULE, TEMPLATE } from '../api/extract.js'
 import { usedBindings } from '../api/scan.js'
 
 export const EXPORTS_SCHEMA_VERSION = 1
@@ -48,7 +48,7 @@ export const EXPORT_SUGGESTIONS = Object.freeze({
   pending: '先不动：等没合并的分支合并或关闭后再判断',
   dormant: '保留：有注释掉的引用，以后可能恢复',
   'test-only': '确认业务还要不要；要删就连同测试一起删',
-  internal: '只去掉 export，声明保留（同文件里在用）',
+  internal: '只去掉 export，声明保留（同文件里在用，或初始化时执行的代码可能有副作用）',
   'dead-only-ref': '和引用它的、同样没人用的代码一起删',
   dead: '删掉这个声明（连同 export）'
 })
@@ -127,6 +127,9 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
     const names = unusedMain.get(p.path)
     if (!names || names.size === 0) continue
     const used = usedBindings(p, names)
+    // 初始化时执行了可能有副作用的调用的声明（export const x = register(...)）：删掉会丢掉副作用，连同它引用的都要留着
+    const effects = new Map([...(p.initCalls ?? [])].map(([n, calls]) => [n, calls.filter((c) => !isPureCall(c))]).filter(([, c]) => c.length > 0))
+    const kept = closure(p, [...used, ...effects.keys()])
     for (const name of [...names].sort()) {
       if (autoUsed.has(`${p.path}#${name}`)) continue
       const local = [...p.bindings].find(([, b]) => b.exported.has(name))?.[0] ?? null
@@ -139,8 +142,16 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
         item.evidence.unshift({ rule: 'reexport', detail: `这是转出（export { ${re.imported === name ? name : `${re.imported} as ${name}`} } from '${re.source}'）：没人从这里引入，删掉这条转出即可，原文件里的声明另算` })
       } else if (local !== null && used.has(local)) {
         item.status = 'internal'
-        const by = [...p.bindings].filter(([n, b]) => n !== local && used.has(n) && b.refs.has(local)).map(([n]) => n)
+        const by = [...p.bindings].filter(([n, b]) => n !== local && used.has(n) && b.refs.has(local)).map(([n]) => (n === MODULE ? '模块加载时执行的代码' : n === TEMPLATE ? '组件模板' : n))
         item.evidence.unshift({ rule: 'internal-use', detail: `同文件里在用的${by.length > 0 ? ` ${by.slice(0, 5).join('、')}` : '代码（模块顶层）'} 调用它：只能去掉 export` })
+      } else if (local !== null && effects.has(local)) {
+        item.status = 'internal'
+        const calls = [...new Set(effects.get(local))]
+        item.evidence.unshift({ rule: 'init-side-effect', detail: `初始化时执行了 ${calls.slice(0, 3).map((c) => `${c}()`).join('、')}，可能有副作用（注册、改全局状态等）：只去掉 export，声明保留；确认没有副作用再删` })
+      } else if (local !== null && kept.has(local)) {
+        item.status = 'internal'
+        const by = [...p.bindings].filter(([n, b]) => n !== local && kept.has(n) && b.refs.has(local)).map(([n]) => n)
+        item.evidence.unshift({ rule: 'init-side-effect', detail: `同文件里初始化时有副作用、要留着的 ${by.slice(0, 5).join('、')} 引用它：只能去掉 export` })
       } else if (local !== null && [...p.bindings].some(([n, b]) => n !== local && b.refs.has(local))) {
         item.status = 'dead-only-ref'
         const by = [...p.bindings].filter(([n, b]) => n !== local && b.refs.has(local)).map(([n]) => n)
@@ -264,6 +275,39 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
 function raise(item, status, evidence) {
   item.evidence.unshift(evidence)
   if (EXPORT_STATUSES.indexOf(status) < EXPORT_STATUSES.indexOf(item.status)) item.status = status
+}
+
+/**
+ * 常见的没有副作用的调用：初始化只调用这些的声明，删掉不会丢掉行为。名单外的都当可能有副作用（偏保守：只建议去掉 export）
+ * 按被调用的完整写法认（Object.freeze、defineStore），任意对象上的数组、字符串方法（list.map、s.trim）也算
+ */
+const PURE_CALLS = new Set([
+  'defineStore', 'defineComponent', 'defineAsyncComponent', 'ref', 'reactive', 'computed', 'shallowRef', 'shallowReactive', 'readonly', 'shallowReadonly', 'markRaw', 'toRaw', 'toRef', 'toRefs', 'h',
+  'createContext', 'React.createContext', 'forwardRef', 'React.forwardRef', 'memo', 'React.memo', 'lazy', 'React.lazy', 'createElement', 'React.createElement',
+  'Symbol', 'Symbol.for', 'String', 'Number', 'Boolean', 'BigInt', 'Array', 'Array.from', 'Array.of', 'Array.isArray', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Date', 'RegExp', 'Error', 'TypeError', 'URL', 'URLSearchParams', 'Proxy',
+  'Object.freeze', 'Object.keys', 'Object.values', 'Object.entries', 'Object.fromEntries', 'Object.create', 'JSON.parse', 'JSON.stringify', 'parseInt', 'parseFloat', 'encodeURIComponent', 'decodeURIComponent'
+])
+const PURE_METHODS = new Set(['map', 'filter', 'reduce', 'concat', 'slice', 'join', 'split', 'replace', 'replaceAll', 'trim', 'toLowerCase', 'toUpperCase', 'toString', 'toFixed', 'flat', 'flatMap', 'find', 'some', 'every', 'includes', 'indexOf', 'padStart', 'padEnd', 'repeat', 'bind', 'keys', 'values', 'entries'])
+
+export function isPureCall(name) {
+  if (PURE_CALLS.has(name) || name.startsWith('Math.')) return true
+  const dot = name.lastIndexOf('.')
+  return dot > 0 && PURE_METHODS.has(name.slice(dot + 1)) && !name.startsWith('Object.') && !name.startsWith('Reflect.')
+}
+
+/** 从这些名字出发，同文件里引用到的名字都算上 */
+function closure(p, roots) {
+  const out = new Set(roots)
+  const queue = [...out]
+  while (queue.length > 0) {
+    for (const r of p.bindings.get(queue.pop())?.refs ?? []) {
+      if (!out.has(r)) {
+        out.add(r)
+        queue.push(r)
+      }
+    }
+  }
+  return out
 }
 
 function escapeRe(s) {

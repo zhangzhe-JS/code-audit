@@ -284,7 +284,8 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js --in
 node bin/code-audit.js report --profile profiles/my-app.js --in reports/my-app/verified.json --out reports/my-app/out
 ```
 
-- 只看新增的问题：基线本来就失败的测试、本来就有的警告不算。基线本来就有失败时，还会比退出码、通过的用例数，测试整个崩了也能发现
+- 只看新增的问题：基线本来就失败的测试、本来就有的警告不算。基线本来就有失败时，还会比退出码、通过的用例数（删后数不出按 0 算），测试整个崩了也能发现
+- 重新验证时上一次的结论先清掉：这次没验证到的（轮数用完）不会沿用旧的「通过」进隔离计划
 - 完整输出写进日志（不截断）；比较用整个输出里的关键行（失败、警告、通过、汇总、报错），输出再长也不漏
 - 全部删掉没问题，一般「基线 + 1 轮」就结束（基线有缓存时只有 1 轮）；有问题时先从报错里认出是哪些文件，认不出再对半找（最多 40 轮）
 - 有 import 关系的候选绑在一起删（引用方和被引用的），不会冤枉被引用的
@@ -322,7 +323,7 @@ node bin/code-audit.js exports-report --in reports/my-app/exports.json --out rep
 | `pending` | 没合并的分支里有文件 import 它，或分支改过这个文件、新加了对它的调用 | 等分支合并或关闭 |
 | `dormant` | 在用的代码里有注释掉的引用 | 保留 |
 | `test-only` | 只有测试 import 它 | 确认业务还要不要，删就连同测试 |
-| `internal` | 外部没人用，同文件里在用的代码调用它 | 只去掉 export |
+| `internal` | 外部没人用，同文件里在用的代码调用它；或者初始化时执行了可能有副作用的调用（`export const x = register()`，常见的纯工厂函数不算） | 只去掉 export |
 | `dead-only-ref` | 同文件里只有同样没人用的代码引用它 | 一起删 |
 | `dead` | 同文件里也没人引用；或没人引用的转出（export { a } from） | 删掉声明 / 转出 |
 

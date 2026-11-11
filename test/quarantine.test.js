@@ -156,6 +156,16 @@ test('rewriteRelativePaths：优先改成别名；指向一起移走的按新位
   assert.deepEqual(r.unresolved, [{ line: 5, spec: './missing' }])
 })
 
+test('rewriteRelativePaths：@import url() 同时符合两种写法，只改一次（改两遍会指到别的文件）', () => {
+  const files = new Set(['src/a/R.vue', 'src/b.css', 'b.css', 'src/img/x.png'])
+  const moved = new Map([['src/a/R.vue', 'src/_d/a/R.vue']])
+  const content = "@import url('../b.css'); .x { background: url(../img/x.png) }"
+  const r = rewriteRelativePaths({ content, from: 'src/a/R.vue', to: 'src/_d/a/R.vue', moved, locate: makeLocator(files, ['.js']) })
+  assert.equal(r.content, "@import url('../../b.css'); .x { background: url(../../img/x.png) }")
+  assert.deepEqual(r.changes.map((c) => c.after), ['../../b.css', '../../img/x.png'])
+  assert.deepEqual(r.unresolved, [])
+})
+
 // ---------- 头注释、README ----------
 
 test('insertHeader：放在最前面；#! 开头的放在它后面', () => {

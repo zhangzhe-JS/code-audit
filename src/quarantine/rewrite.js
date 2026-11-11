@@ -42,22 +42,38 @@ export function rewriteRelativePaths({ content, from, to, moved, aliases = {}, l
   const out = lines.map((text, i) => {
     const trimmed = text.trimStart()
     if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return text
-    let line = text
+    // 各写法都在原始这一行上找，按位置一次改完；位置重叠的只取先认出的那个
+    // （@import url('../a.css') 同时符合 @import 和 url() 两种写法，分两遍改会把改好的路径再按原位置算一遍）
+    const hits = []
     for (const re of PATTERNS) {
-      line = line.replace(re, (all, lead, quote, spec) => {
-        const [path, suffix] = splitSuffix(spec)
-        const resolved = posix.normalize(posix.join(posix.dirname(from), path))
-        if (resolved.startsWith('../')) return all // 指到仓库外面：不管
-        const hit = locate(resolved)
-        if (hit === null) {
-          unresolved.push({ line: i + 1, spec })
-          return all
-        }
-        const next = newSpec({ resolved, hit, to, moved, aliases }) + suffix
-        if (next === spec) return all
-        changes.push({ line: i + 1, before: spec, after: next })
-        return `${lead}${quote}${next}${quote}`
-      })
+      for (const m of text.matchAll(re)) {
+        const start = m.index
+        const end = start + m[0].length
+        if (hits.some((h) => start < h.end && h.start < end)) continue
+        hits.push({ start, end, all: m[0], lead: m[1], quote: m[2], spec: m[3] })
+      }
+    }
+    hits.sort((a, b) => a.start - b.start)
+    let line = ''
+    let at = 0
+    for (const h of hits) {
+      line += text.slice(at, h.start) + replace(h)
+      at = h.end
+    }
+    line += text.slice(at)
+    function replace({ all, lead, quote, spec }) {
+      const [path, suffix] = splitSuffix(spec)
+      const resolved = posix.normalize(posix.join(posix.dirname(from), path))
+      if (resolved.startsWith('../')) return all // 指到仓库外面：不管
+      const hit = locate(resolved)
+      if (hit === null) {
+        unresolved.push({ line: i + 1, spec })
+        return all
+      }
+      const next = newSpec({ resolved, hit, to, moved, aliases }) + suffix
+      if (next === spec) return all
+      changes.push({ line: i + 1, before: spec, after: next })
+      return `${lead}${quote}${next}${quote}`
     }
     return line
   })

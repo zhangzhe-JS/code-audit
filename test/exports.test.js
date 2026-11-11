@@ -147,3 +147,34 @@ test('applyBundlerExports：构建保留了的 dead / test-only 改判 unknown�
 test('addBundlerEvidence：profile 没写 verify.build / bundler 时说清楚要写什么', async () => {
   await assert.rejects(addBundlerEvidence({ root: '/x', result: { project: { rev: 'x' } }, config: resolveConfig({}) }), /verify 里写上 build/)
 })
+
+test('scanExports：没人用的导出初始化时执行了可能有副作用的调用，只建议去掉 export；它引用的也留着；常见的纯工厂函数照常判 dead', () => {
+  const repo = createRepo()
+  try {
+    repo.write('package.json', JSON.stringify({ name: 'x', type: 'module' }))
+    repo.write('app/index.ts', "import { used } from './lib/reg'\nused()\n")
+    repo.write('app/lib/reg.ts', [
+      'export const used = () => 1',
+      "export const plugin = registerPlugin('x', handler)", // 注册：删掉就丢了
+      'export function handler() { return 2 }', // 被要留着的 plugin 引用
+      "export const maybe = flag ? setup() : null", // 条件里的调用也算
+      "export const useS = defineStore('s', {})", // 纯工厂：照常 dead
+      'export const KEYS = Object.freeze([1])',
+      'declare function registerPlugin(a: string, b: unknown): void',
+      'declare function setup(): void',
+      'declare function defineStore(a: string, b: unknown): void',
+      'declare const flag: boolean'
+    ].join('\n'))
+    repo.commit('init', { date: '2024-01-01' })
+    const config = resolveConfig({ sourceRoots: ['app'], entries: ['app/index.ts'] })
+    const r = scanExports({ root: repo.root, project: 'x', config })
+    const get = (n) => r.items.find((c) => c.name === n)
+    assert.deepEqual(Object.fromEntries(r.items.map((c) => [c.name, c.status])), { KEYS: 'dead', handler: 'internal', maybe: 'internal', plugin: 'internal', useS: 'dead' })
+    assert.match(get('plugin').evidence[0].detail, /registerPlugin\(\)，可能有副作用/)
+    assert.match(get('maybe').evidence[0].detail, /setup\(\)/)
+    assert.match(get('handler').evidence[0].detail, /模块加载时执行的代码 调用它/)
+    assert.deepEqual(validateExportsResult(r), [])
+  } finally {
+    repo.cleanup()
+  }
+})

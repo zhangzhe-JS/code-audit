@@ -71,6 +71,26 @@ test('compareApi：地址改了（要处理）、新增像已有的、不再定�
   assert.match(checkMarkdown(r), /### 要处理（1）/)
 })
 
+test('compareApi：同一个函数换了地址，旧地址别处还在用、新地址以前别处就有，也照样提示', () => {
+  const before = result('p', [
+    ep('GET /order/old', 'live', [def('src/api.js', 5, 'getOrder'), def('src/legacy.js', 1, 'legacy')]),
+    ep('GET /user/a', 'live', [def('src/user.js', 1, 'getUser')]),
+    ep('GET /user/b', 'live', [def('src/user2.js', 1, 'getUser2')])
+  ])
+  const after = result('p', [
+    ep('GET /order/old', 'live', [def('src/legacy.js', 1, 'legacy')]),
+    ep('GET /order/new', 'live', [def('src/api.js', 5, 'getOrder')]),
+    ep('GET /user/b', 'live', [def('src/user.js', 1, 'getUser'), def('src/user2.js', 1, 'getUser2')])
+  ])
+  const r = compareApi({ before, after })
+  const changed = r.findings.filter((f) => f.kind === 'changed-address')
+  assert.deepEqual(changed.map((f) => `${f.level}:${f.key}`), ['risk:GET /order/new', 'warn:GET /user/b'])
+  assert.match(changed[0].detail, /GET \/order\/old 项目里别处还在用（src\/legacy\.js:1）/)
+  assert.match(changed[1].detail, /新地址项目里本来就有.*确认参数、返回和原来一致/)
+  // 新地址算在「地址改了」里，不再另报新增；不再定义的旧地址（/user/a）也算在里面
+  assert.deepEqual(r.findings.filter((f) => ['added', 'added-similar', 'removed'].includes(f.kind)).map((f) => f.key), [])
+})
+
 test('compareApi：没给其他项目时写明看不出；SDK 接口不再定义不提示；没有变化时 Markdown 说没有', () => {
   const before = result('p', [ep('GET /x', 'live', [def('a.js', 1, 'x')]), ep('POST /login', 'sdk', [], { sdk: { package: 's' } })])
   const after = result('p', [])

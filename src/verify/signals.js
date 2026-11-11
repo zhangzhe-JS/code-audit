@@ -75,9 +75,10 @@ export function compare(baseline, current, workDir) {
           worse('测试没有正常跑完：基线认得出失败的用例，删后一个都认不出（可能整个崩了）')
         }
       }
+      // 删后用和基线同一种办法数：基线读的是汇总行就读汇总行，数的是 ✓ 就数 ✓；删后一个都数不出来按 0 算
       const pb = passedCount(full(before), workDir)
-      const pa = passedCount(full(after), workDir)
-      if (pb && pa && pb.by === pa.by && pa.n < pb.n) worse(`通过的测试变少了：${pb.n} → ${pa.n}`)
+      const pa = pb ? passedCount(full(after), workDir, pb.by) : null
+      if (pb && pb.n > 0 && (pa?.n ?? 0) < pb.n) worse(`通过的测试变少了：${pb.n} → ${pa?.n ?? 0}${pa ? '' : '（删后认不出通过的用例）'}`)
     }
   }
   result.passed = problems.length === 0
@@ -91,13 +92,16 @@ function full(r) {
 
 /**
  * 通过的用例数：优先读汇总行（vitest「Tests  10 failed | 718 passed (728)」、jest「Tests: 1 failed, 99 passed, 100 total」），
- * 没有汇总行时数 ✓ / ✔ / PASS 开头的行。都没有返回 null（不比较）
+ * 没有汇总行时数 ✓ / ✔ / PASS 开头的行。都没有返回 null。by：只用这一种办法数（和基线比较时用基线的办法）
  * @returns {{n: number, by: 'summary'|'marks'} | null}
  */
-export function passedCount(output, workDir) {
+export function passedCount(output, workDir, by = null) {
   const all = lines(output, workDir)
-  const summary = all.filter((l) => /^Tests?:?\s/.test(l)).map((l) => l.match(/(\d+) passed/)).filter(Boolean).at(-1)
-  if (summary) return { n: Number(summary[1]), by: 'summary' }
+  if (by !== 'marks') {
+    const summary = all.filter((l) => /^Tests?:?\s/.test(l)).map((l) => l.match(/(\d+) passed/)).filter(Boolean).at(-1)
+    if (summary) return { n: Number(summary[1]), by: 'summary' }
+    if (by === 'summary') return null
+  }
   const marks = all.filter((l) => /^(PASS\b|[✓✔]\s)/.test(l)).length
   return marks > 0 ? { n: marks, by: 'marks' } : null
 }

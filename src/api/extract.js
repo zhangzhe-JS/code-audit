@@ -76,7 +76,7 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   // storeUses：用到的 Vuex 命名空间（dispatch('ns/x')、mapActions('ns') 等）；storeModules：这个文件里注册的 Vuex 模块（modules: { ns: 模块 }）
   // storeActionUses：用到的具体 action（ns/action）；storeActions：这个文件里的 Vuex actions 各自引用了哪些导入的名字
   // declLines：顶层名字声明在第几行（导出维度的报告用）；reexports 里也记下行号
-  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
+  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), initCalls: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
@@ -214,18 +214,90 @@ function topLevelConsts(program) {
 /** 顶层语句属于哪个名字：函数、变量声明属于它声明的名字；export default 属于 default；其余是模块顶层执行的代码 */
 function ownersOf(node) {
   if (node.type === 'ExportNamedDeclaration') return node.declaration ? ownersOf(node.declaration) : []
-  if (node.type === 'ExportDefaultDeclaration') return ['default']
+  if (node.type === 'ExportDefaultDeclaration') {
+    // export default load()、export default flag ? a() : b()：导出的同时就执行了
+    const d = node.declaration
+    return !DECLARATIONS.has(d.type) && loadCallees(d).length > 0 ? ['default', MODULE] : ['default']
+  }
   if (node.type === 'ImportDeclaration' || node.type === 'ExportAllDeclaration') return []
   const names = declNames(node)
   if (names.length === 0) return [MODULE]
-  // const x = request(...) 这类：声明的同时就执行了，也算模块顶层执行的代码
-  if (node.type === 'VariableDeclaration' && node.declarations.some((d) => d.init && hasSideEffects(d.init))) return [...names, MODULE]
+  // const x = request(...)、const x = flag ? request() : null 这类：声明的同时就执行了，也算模块顶层执行的代码
+  if (node.type === 'VariableDeclaration' && node.declarations.some((d) => d.init && loadCallees(d.init).length > 0)) return [...names, MODULE]
   return names
 }
 
-/** 变量初始值是不是会立刻执行代码（调用、new）：这种在模块加载时就运行 */
-function hasSideEffects(init) {
-  return init.type === 'CallExpression' || init.type === 'NewExpression' || init.type === 'AwaitExpression'
+const DECLARATIONS = new Set(['FunctionDeclaration', 'ClassDeclaration', 'TSInterfaceDeclaration', 'TSTypeAliasDeclaration', 'TSEnumDeclaration', 'TSDeclareFunction'])
+
+/**
+ * 函数在模块加载时会不会被执行：立即调用的（(() => {})()）、作为参数传给调用的（回调，load().then(cb)、setTimeout(cb)）算会执行（偏保守）；
+ * 其余（对象的方法、赋给变量、export 出去）只是定义，被调用时才执行
+ */
+function runsAtLoad(parent, key) {
+  if (!parent) return false
+  if ((parent.type === 'CallExpression' || parent.type === 'NewExpression') && (key === 'callee' || key === 'arguments')) return true
+  return false
+}
+
+/**
+ * 表达式求值时（模块加载时）会执行的调用，返回被调用的名字（app.use、register；算不出的写 '<call>'）。
+ * 进条件、逻辑、数组、对象、模板等各种写法里找；函数体只在会被执行时才进（runsAtLoad）；类只看 extends、计算属性名、静态字段和静态块
+ */
+export function loadCallees(expr) {
+  const out = []
+  // outer：外面包着括号时，括号外面的那一层（((() => {}))() 也是立即调用）
+  const visit = (n, parent, key, outer = null) => {
+    if (!n || typeof n.type !== 'string') return
+    if (FUNCTIONS.has(n.type) && !(outer ? runsAtLoad(outer[0], outer[1]) : runsAtLoad(parent, key))) return
+    if (n.type === 'ClassBody') {
+      for (const m of n.body) {
+        if (m.computed) visit(m.key, m, 'key')
+        if (m.type === 'StaticBlock') visit(m, n, 'body')
+        else if (m.static && m.type !== 'MethodDefinition' && m.type !== 'TSAbstractMethodDefinition') visit(m.value, m, 'value')
+      }
+      return
+    }
+    if (n.type === 'CallExpression' || n.type === 'NewExpression') out.push(calleeName(n.callee))
+    else if (n.type === 'TaggedTemplateExpression') out.push(calleeName(n.tag))
+    else if (n.type === 'AwaitExpression' || n.type === 'ImportExpression') out.push(`<${n.type === 'AwaitExpression' ? 'await' : 'import'}>`)
+    for (const [k, child] of Object.entries(n)) {
+      if (k === 'type' || k === 'start' || k === 'end' || k === 'loc' || k === 'range') continue
+      const o = n.type === 'ParenthesizedExpression' ? (outer ?? [parent, key]) : null
+      if (Array.isArray(child)) child.forEach((c) => visit(c, n, k, o))
+      else if (child && typeof child === 'object') visit(child, n, k, o)
+    }
+  }
+  visit(expr, null, null)
+  return out
+}
+
+function calleeName(c) {
+  if (c.type === 'Identifier') return c.name
+  if (c.type === 'MemberExpression' && !c.computed && c.property.type === 'Identifier') {
+    const obj = calleeName(c.object)
+    return obj === '<call>' ? `<call>.${c.property.name}` : `${obj}.${c.property.name}`
+  }
+  if (c.type === 'ChainExpression' || c.type === 'TSNonNullExpression' || c.type === 'ParenthesizedExpression') return calleeName(c.expression)
+  return '<call>'
+}
+
+/** 顶层声明里初始化时执行的调用：名字 → 被调用的名字（导出维度判断删声明会不会丢掉副作用） */
+function initCallsOf(node) {
+  const decl = node.type === 'ExportNamedDeclaration' ? node.declaration : node
+  const out = new Map()
+  if (decl?.type === 'VariableDeclaration') {
+    for (const d of decl.declarations) {
+      const calls = d.init ? loadCallees(d.init) : []
+      if (calls.length > 0) for (const n of patternNames(d.id)) out.set(n, calls)
+    }
+  } else if (decl?.type === 'ClassDeclaration' && decl.id) {
+    const calls = [...(decl.superClass ? loadCallees(decl.superClass) : []), ...loadCallees(decl.body)]
+    if (calls.length > 0) out.set(decl.id.name, calls)
+  } else if (decl?.type === 'ExportDefaultDeclaration' && !DECLARATIONS.has(decl.declaration.type)) {
+    const calls = loadCallees(decl.declaration)
+    if (calls.length > 0) out.set('default', calls)
+  }
+  return out
 }
 
 // ---------- 遍历 ----------
@@ -248,13 +320,16 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
     const useOwners = owners.length > 1 ? owners.filter((o) => o !== MODULE) : owners
     // loadTime：声明的同时执行了代码的名字（const data = load()），菜单归属里导入名用在这里时，文件被加载就会运行
     if (owners.length > 1 && owners.includes(MODULE)) for (const o of useOwners) result.loadTime.add(o)
+    for (const [n, c] of initCallsOf(node)) result.initCalls.set(n, c)
+    // 只定义不执行的函数（对象的方法等）里的请求，不算模块顶层执行：只属于声明的名字
+    let deferred = 0
     const refs = new Set()
     const consumed = new Set()
     // 作用域链：地址常先赋给局部常量再传进请求（const url = `...`），按真实的作用域查找，内层同名的会遮住外层。
     // 第 0 层是文件顶层的常量；函数、代码块、for、catch 各是一层
     const frames = [{ consts, params: new Set(), opaque: new Set() }]
     const shadowed = (name) => frames.slice(1).some((f) => f.consts.has(name) || f.params.has(name) || f.opaque.has(name))
-    const visit = (n, parent, key) => {
+    const visit = (n, parent, key, outer = null) => {
       if (!n || typeof n.type !== 'string') return
       if (n.type === 'Identifier') {
         if (isReference(n, parent, key) && !shadowed(n.name)) {
@@ -295,14 +370,18 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
       collectLinks(n, result)
       const frame = scopeFrame(n, keys)
       if (frame) frames.push(frame)
+      const defer = FUNCTIONS.has(n.type) && !(outer ? runsAtLoad(outer[0], outer[1]) : runsAtLoad(parent, key))
+      if (defer) deferred++
       if (n.type === 'CallExpression' && !consumed.has(n)) {
-        handleCall({ node: n, owners, scope: flattenScope(frames), calls, prefixes, ignore, lineOf, result, consumed })
+        handleCall({ node: n, owners: deferred > 0 ? useOwners : owners, scope: flattenScope(frames), calls, prefixes, ignore, lineOf, result, consumed })
       }
+      const o = n.type === 'ParenthesizedExpression' ? (outer ?? [parent, key]) : null
       for (const k of keys[n.type] ?? Object.keys(n)) {
         const child = n[k]
-        if (Array.isArray(child)) child.forEach((c) => visit(c, n, k))
-        else if (child && typeof child === 'object') visit(child, n, k)
+        if (Array.isArray(child)) child.forEach((c) => visit(c, n, k, o))
+        else if (child && typeof child === 'object') visit(child, n, k, o)
       }
+      if (defer) deferred--
       if (frame) frames.pop()
     }
     visit(node, null, null)

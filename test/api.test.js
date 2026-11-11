@@ -885,3 +885,32 @@ test('createMenuFinder：引用链断了时未归属；配置校验', () => {
   assert.deepEqual(find(['src/orphan.js']), { menus: [], global: false })
   assert.deepEqual(find(['src/a.vue']), { menus: ['A'], global: false })
 })
+
+test('extractFile：模块加载时执行的请求——条件、逻辑、立即调用、回调、export default 都算顶层执行；对象方法里的只属于声明的名字', () => {
+  const content = [
+    "import request from '@/utils/request'",
+    "const a = flag ? request({ url: '/cond' }) : null",
+    "const b = ready && [request({ url: '/logic' })]",
+    "const c = (() => request({ url: '/iife' }))()",
+    "const d = boot().then(() => request({ url: '/then' }))",
+    "export const store = defineStore('s', { actions: { load() { return request({ url: '/act' }) } } })",
+    "const e = { m() { return request({ url: '/method' }) } }",
+    "export default flag ? request({ url: '/def' }) : null",
+    "const f = { cfg: 1 }"
+  ].join('\n')
+  const r = extractFile({ parser, path: 'src/a.js', content, calls: rules({ calls: [{ call: 'request({url})', method: 'GET' }] }) })
+  const owners = Object.fromEntries(r.sites.map((s) => [s.path, s.owners.join(',')]))
+  assert.deepEqual(owners, {
+    '/cond': `a,${MODULE}`,
+    '/logic': `b,${MODULE}`,
+    '/iife': `c,${MODULE}`,
+    '/then': `d,${MODULE}`,
+    '/act': 'store', // 只定义不执行：store 没人用就是没人用
+    '/method': 'e',
+    '/def': `default,${MODULE}`
+  })
+  assert.deepEqual([...r.initCalls.keys()].sort(), ['a', 'b', 'c', 'd', 'default', 'store'])
+  assert.deepEqual(r.initCalls.get('store'), ['defineStore'])
+  assert.deepEqual(r.initCalls.get('d'), ['<call>.then', 'boot', 'request'])
+  assert.ok(!r.initCalls.has('e') && !r.initCalls.has('f'))
+})
