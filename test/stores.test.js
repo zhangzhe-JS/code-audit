@@ -138,9 +138,9 @@ test('scanApi：请求写在 store 的 action 里，store 在用、action 没人
     ].join('\n'))
     repo.write('src/store/order.js', [
       "import request from '../utils/request.js'",
-      "export default { namespaced: true, actions: { fetch() { return request({ url: '/order/fetch' }) }, drop() { return request({ url: '/order/drop' }) } } }"
+      "export default { namespaced: true, actions: { fetch() { return request({ url: '/order/fetch' }) }, drop() { return request({ url: '/order/drop' }) }, undo() { return request({ url: '/order/undo' }) } } }"
     ].join('\n'))
-    repo.write('src/store/index.js', "import { createStore } from 'vuex'\nimport order from './order.js'\nexport default createStore({ modules: { order } })\n")
+    repo.write('src/store/index.js', "import { createStore } from 'vuex'\nimport order from './order.js'\nexport default createStore({ modules: { order, order2: order } })\n")
     const main = [
       "import { mapActions } from 'pinia'",
       "import { useUserStore as useU } from './stores/user.js'",
@@ -152,6 +152,7 @@ test('scanApi：请求写在 store 的 action 里，store 在用、action 没人
       's.refresh()',
       'helper(useWholeStore())',
       "store.dispatch('order/fetch')",
+      "store.dispatch('order2/undo')", // 同一个模块的第二个命名空间
       "export default { methods: { ...mapActions(useCartStore, ['add']) } }"
     ]
     repo.write('src/main.js', main.join('\n'))
@@ -164,6 +165,7 @@ test('scanApi：请求写在 store 的 action 里，store 在用、action 没人
       '/cart/save': 'live', // add 调用 this.save()
       '/order/drop': 'dead',
       '/order/fetch': 'live',
+      '/order/undo': 'live',
       '/user/boot': 'live', // store 创建时就执行
       '/user/inner': 'live', // refresh 调用它
       '/user/load': 'live',
@@ -175,7 +177,7 @@ test('scanApi：请求写在 store 的 action 里，store 在用、action 没人
     assert.match(reason('/user/login'), /store useUserStore 在用，但走到这里的 action（login）没有地方调用/)
     assert.match(reason('/user/login'), /useU/, '引用方里的别名也找过')
     assert.match(reason('/user/orphan'), /不在任何对外交出的 action 里/)
-    assert.match(reason('/order/drop'), /Vuex 模块 order 在用，但 action drop 没有地方派发/)
+    assert.match(reason('/order/drop'), /Vuex 模块 order、order2 在用，但 action drop 没有地方派发/)
 
     // 项目里有算不出类型的派发：Vuex 的都不判；store 在自己文件里被别的代码用到：Pinia 的不判
     repo.write('src/main.js', [...main, 'export const go = (t) => store.dispatch(t)'].join('\n'))

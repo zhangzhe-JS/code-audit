@@ -285,11 +285,12 @@ export function createActionChecker({ parsed, unreachable, callers, aliases }) {
       return { status: 'dead', reason: `store ${b} 在用，但${what}（找过 ${[...names].join('、')}() 的成员调用、解构、mapActions、模板里的写法）` }
     }
     if (site.vuexAction) {
-      const ns = vuex.nsOf(p.path)
-      if (!ns || dispatch.dynamic) return null
+      const all = vuex.nsAll(p.path)
+      if (all.length === 0 || dispatch.dynamic) return null
+      const ns = all.join('、')
       const a = site.vuexAction
-      if (dispatch.plain.has(a) || dispatch.ns.has(`${ns}/${a}`)) return null
-      return { status: 'dead', reason: `Vuex 模块 ${ns} 在用，但 action ${a} 没有地方派发（找过 dispatch('${ns}/${a}')、mapActions('${ns}', [...])、不带命名空间的 dispatch('${a}')）` }
+      if (dispatch.plain.has(a) || all.some((n) => dispatch.ns.has(`${n}/${a}`))) return null
+      return { status: 'dead', reason: `Vuex 模块 ${ns} 在用，但 action ${a} 没有地方派发（找过 dispatch('${all[0]}/${a}')、mapActions('${all[0]}', [...])、不带命名空间的 dispatch('${a}')）` }
     }
     return null
   }

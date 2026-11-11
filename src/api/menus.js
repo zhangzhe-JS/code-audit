@@ -211,17 +211,21 @@ export function vuexModuleResolver({ parsed, aliases, lookup }) {
   const roots = [...registry.keys()].filter((f) => !registered.has(f))
   // 模块文件 → 命名空间（从根往下走一遍）
   const nsMap = new Map()
+  const allNs = new Map() // 同一个模块可能注册在好几个命名空间下
   const walk = (file, prefix, depth) => {
     if (depth > 10) return
     for (const [name, target] of registry.get(file) ?? []) {
       const ns = prefix ? `${prefix}/${name}` : name
       if (!nsMap.has(target)) nsMap.set(target, ns)
+      if (!allNs.has(target)) allNs.set(target, new Set())
+      allNs.get(target).add(ns)
       walk(target, ns, depth + 1)
     }
   }
   for (const r of roots) walk(r, '', 0)
   return {
     nsOf: (file) => nsMap.get(file) ?? null,
+    nsAll: (file) => [...(allNs.get(file) ?? [])],
     fileOf: (ns) => {
       const parts = ns.split('/').filter(Boolean)
       for (const root of roots) {
