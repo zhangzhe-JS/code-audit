@@ -91,6 +91,35 @@ test('compareApi：同一个函数换了地址，旧地址别处还在用、新�
   assert.deepEqual(r.findings.filter((f) => ['added', 'added-similar', 'removed'].includes(f.kind)).map((f) => f.key), [])
 })
 
+test('compareApi：函数改了名、同时改了地址——同一个文件里正好一个没了一个新出现时按改名提示；对不上的照旧', () => {
+  const before = result('p', [
+    ep('GET /order/old', 'live', [def('src/order.js', 5, 'getOrder')]),
+    ep('GET /a/one', 'live', [def('src/multi.js', 1, 'one')]),
+    ep('GET /a/two', 'live', [def('src/multi.js', 2, 'two')]),
+    ep('GET /keep', 'live', [def('src/keep.js', 1, 'oldName')]),
+    ep('GET /shared', 'live', [def('src/s.js', 1, 'sharedOld'), def('src/t.js', 1, 'other')])
+  ])
+  const after = result('p', [
+    ep('GET /order/new', 'live', [def('src/order.js', 5, 'fetchOrder')]),
+    ep('GET /a/three', 'live', [def('src/multi.js', 1, 'three')]),
+    ep('GET /a/four', 'live', [def('src/multi.js', 2, 'four')]),
+    ep('GET /keep', 'live', [def('src/keep.js', 1, 'newName')]), // 只改了名：接口没变，不提示
+    ep('GET /shared', 'live', [def('src/t.js', 1, 'other')]),
+    ep('GET /shared/new', 'live', [def('src/s.js', 1, 'sharedNew')]) // 旧地址别处还在：不按改名配
+  ])
+  const r = compareApi({ before, after })
+  const kinds = r.findings.map((f) => `${f.level}:${f.kind}:${f.key}`).sort()
+  assert.deepEqual(kinds, [
+    'info:added:GET /a/four',
+    'info:added:GET /a/three',
+    'info:added:GET /shared/new',
+    'info:removed:GET /a/one',
+    'info:removed:GET /a/two',
+    'risk:changed-address:GET /order/new'
+  ])
+  assert.match(r.findings.find((f) => f.kind === 'changed-address').detail, /src\/order\.js 的 getOrder 改名成 fetchOrder.*从 GET \/order\/old 改成了 GET \/order\/new/)
+})
+
 test('compareApi：没给其他项目时写明看不出；SDK 接口不再定义不提示；没有变化时 Markdown 说没有', () => {
   const before = result('p', [ep('GET /x', 'live', [def('a.js', 1, 'x')]), ep('POST /login', 'sdk', [], { sdk: { package: 's' } })])
   const after = result('p', [])

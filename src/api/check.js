@@ -42,7 +42,7 @@ export function compareApi({ before, after, others = [], changed = null }) {
     const m = new Map()
     for (const e of r.endpoints) for (const d of e.definitions) {
       const id = `${d.file}#${d.fn}`
-      const x = m.get(id) ?? { keys: [], live: false }
+      const x = m.get(id) ?? { file: d.file, fn: d.fn, keys: [], live: false }
       if (!x.keys.includes(e.key)) x.keys.push(e.key)
       if (d.state === LIVE) x.live = true
       m.set(id, x)
@@ -52,12 +52,10 @@ export function compareApi({ before, after, others = [], changed = null }) {
   const fnB = keysOf(before)
   const fnA = keysOf(after)
   const explained = new Set()
-  for (const [id, now] of fnA) {
-    const then = fnB.get(id)
-    if (!then) continue
+  const report = (id, then, now, renamedFrom = null) => {
     const gone = then.keys.filter((k) => !now.keys.includes(k))
     const fresh = now.keys.filter((k) => !then.keys.includes(k))
-    if (gone.length === 0 || fresh.length === 0) continue
+    if (gone.length === 0 || fresh.length === 0) return
     for (const k of gone) if (!a.has(k)) explained.add(k)
     for (const k of fresh) if (!b.has(k)) explained.add(k)
     const brandNew = fresh.filter((k) => !b.has(k))
@@ -65,7 +63,28 @@ export function compareApi({ before, after, others = [], changed = null }) {
     const level = brandNew.length > 0 && (now.live || then.live || gone.some((k) => b.get(k)?.status === LIVE)) ? 'risk' : 'warn'
     const newText = brandNew.length > 0 ? '确认后端已经有新接口' : `新地址项目里本来就有（${fresh.map((k) => where(a.get(k))).join('；')}），确认参数、返回和原来一致`
     const oldText = gone.map((k) => (a.has(k) ? `${k} 项目里别处还在用（${where(a.get(k))}）` : `${k} ${elsewhereText(k)}`)).join('；')
-    add(level, 'changed-address', fresh[0], `${id.replace('#', ' 的 ')} 调用的接口从 ${gone.join('、')} 改成了 ${fresh.join('、')}：${newText}；旧接口：${oldText}`)
+    const who = renamedFrom ? `${now.file} 的 ${renamedFrom} 改名成 ${now.fn}（同一个文件里只有它们一个没了、一个新出现，按改名看），` : `${id.replace('#', ' 的 ')} `
+    add(level, 'changed-address', fresh[0], `${who}调用的接口从 ${gone.join('、')} 改成了 ${fresh.join('、')}：${newText}；旧接口：${oldText}`)
+  }
+  for (const [id, now] of fnA) {
+    const then = fnB.get(id)
+    if (then) report(id, then, now)
+  }
+  // 函数改了名、同时改了地址：同一个文件里正好一个函数没了、一个函数新出现，并且旧的接口这个项目里没了、新的接口是项目里新的，按改名看
+  const byFile = (from, to) => {
+    const m = new Map()
+    for (const [id, x] of from) if (!to.has(id)) m.set(x.file, [...(m.get(x.file) ?? []), [id, x]])
+    return m
+  }
+  const removedFns = byFile(fnB, fnA)
+  const addedFns = byFile(fnA, fnB)
+  for (const [file, removed] of removedFns) {
+    const added = addedFns.get(file) ?? []
+    if (removed.length !== 1 || added.length !== 1) continue
+    const [[, then]] = removed
+    const [[id, now]] = added
+    if (then.keys.some((k) => a.has(k)) || now.keys.some((k) => b.has(k))) continue
+    report(id, then, now, then.fn)
   }
 
   // 新增
@@ -183,6 +202,6 @@ export function checkMarkdown(result) {
   }
   const others = s.others ?? []
   out.push(`> 只看前端代码。别的项目在不在用，取决于给了哪些项目的结果：${others.length === 0 ? '没给' : others.map((o) => `${o.project}（提交 ${String(o.rev).slice(0, 8)}${o.generatedAt ? `，生成于 ${o.generatedAt.slice(0, 10)}` : ''}）`).join('、')}。`)
-  out.push('> 函数改了名、同时改了地址时，会显示成「不再定义」加「新增」，不会提示地址改了。')
+  out.push('> 函数改了名、同时改了地址：同一个文件里正好一个函数没了、一个新出现时按改名提示；对不上的显示成「不再定义」加「新增」。')
   return `${out.join('\n')}\n`
 }
