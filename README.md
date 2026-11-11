@@ -335,6 +335,20 @@ node bin/code-audit.js exports-report --in reports/my-app/exports.json --out rep
   check_change 只能检查 `--check` 登记过的项目：profile 是会被加载执行的 JS，不能让模型随意传路径
 - CI 的配置示例见 `docs/ci.md`
 
+### 生成项目配置的材料：context
+
+规则由模型读项目后生成、人审核。`code-audit context` 不调用模型，只把模型需要的材料整理成一份 Markdown，交给任意大模型：
+
+```bash
+node bin/code-audit.js context --root ../my-app --out ctx.md                                  # 第一次
+node bin/code-audit.js context --root ../my-app --profile x.js --previous api.json --out ctx.md # 补规则
+```
+
+- 内容：依赖（框架、请求库、内部 SDK 候选）、scripts、别名（tsconfig、构建配置片段）、入口和路由、和接口地址有关的 .env 变量、
+  请求封装（按「定义请求方式」打分排在前面）、几份 api 文件样本、已有的 profile、上一次结果的覆盖报告、给模型的写作要求
+- 脱敏：网址的主机名换成 `<host>`、IP 换成 `<ip>`，密钥类变量和像主机名的取值写 `<已隐藏>`；材料里仍有代码片段，发给外部模型前按公司规定确认
+- 模型写好 profile 后用 `code-audit api` 跑，按覆盖报告补规则，带 `--previous` 再生成材料，直到覆盖报告清零
+
 ### 接口维度
 
 回答「这个接口（方法 + 路径）前端还在不在用、什么时候不用的」。在 profile 里写 `api` 规则，说明请求是怎么发出去的：
