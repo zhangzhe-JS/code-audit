@@ -122,27 +122,27 @@ test('scan + knip：全局注册的组件，模板里用到的算在用；没人
 })
 
 test('findTagUses：动态组件写死的名字、resolveComponent 都认；注释里的、名字是变量的、名字更长的不认', () => {
-  const comps = new Map([['BasicModal', 'src/components/BasicModal/index.vue']])
+  const comps = new Map([['AppModal', 'src/components/AppModal/index.vue']])
   const seen = (content) => findTagUses({ files: [{ path: 'src/A.vue', content }], components: comps }).size > 0
   for (const yes of [
-    '<template><component :is="\'BasicModal\'" /></template>',
-    '<template><component v-bind:is="\'basic-modal\'" /></template>',
-    '<template><component is="BasicModal" /></template>',
-    '<template><tr is="vue:basic-modal" /></template>',
-    "<template><i /></template><script setup>const c = resolveComponent('BasicModal')</script>"
+    '<template><component :is="\'AppModal\'" /></template>',
+    '<template><component v-bind:is="\'app-modal\'" /></template>',
+    '<template><component is="AppModal" /></template>',
+    '<template><tr is="vue:app-modal" /></template>',
+    "<template><i /></template><script setup>const c = resolveComponent('AppModal')</script>"
   ]) assert.equal(seen(yes), true, yes)
   for (const no of [
-    '<template><!-- <BasicModal /> --></template>',
-    '<template>\n<!--\n  <basic-modal />\n-->\n</template>',
+    '<template><!-- <AppModal /> --></template>',
+    '<template>\n<!--\n  <app-modal />\n-->\n</template>',
     '<template><component :is="name" /></template>',
-    "<template><i /></template><script>// resolveComponent('BasicModal')</script>",
-    '<template><component is="BasicModalX" /></template>',
-    '<template><div data-is="BasicModal" /></template>'
+    "<template><i /></template><script>// resolveComponent('AppModal')</script>",
+    '<template><component is="AppModalX" /></template>',
+    '<template><div data-is="AppModal" /></template>'
   ]) assert.equal(seen(no), false, no)
 })
 
 test('findTagUses：注释去掉后行号不变；resolveComponent 记脚本里的行号', () => {
-  const content = ['<template>', '  <!-- <BasicModal /> -->', '  <BasicModal />', '</template>', '<script setup>', '// x', "const c = resolveComponent('BasicModal')", '</script>'].join('\n')
-  const r = findTagUses({ files: [{ path: 'src/A.vue', content }], components: new Map([['BasicModal', 'src/M.vue']]) })
+  const content = ['<template>', '  <!-- <AppModal /> -->', '  <AppModal />', '</template>', '<script setup>', '// x', "const c = resolveComponent('AppModal')", '</script>'].join('\n')
+  const r = findTagUses({ files: [{ path: 'src/A.vue', content }], components: new Map([['AppModal', 'src/M.vue']]) })
   assert.deepEqual(r.get('src/M.vue'), [{ from: 'src/A.vue', line: 3 }, { from: 'src/A.vue', line: 7 }])
 })

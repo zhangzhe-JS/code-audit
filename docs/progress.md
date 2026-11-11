@@ -17,7 +17,7 @@
 | M3 | scan：用 knip 采集「从入口走不到」的文件，生成候选清单 | ✅ 完成（46c28e0） |
 | M4 | rules：9 种状态的判定规则，补齐 fixture | ✅ 第一批（306951b～3df184c）；第二批 pending 完成；internal 随导出维度一起做 |
 | M5 | verify：临时目录实删，和构建 / 测试基线对比 | ✅ ① 试跑基线（fe163a1）、② 删除对比 + 定位（3a34279） |
-| M6 | 接入第二个项目（Vue3 + TS） | ✅ findip-portal-web 全流程跑通 |
+| M6 | 接入第二个项目（Vue3 + TS） | ✅ 项目 B 全流程跑通 |
 | M7 | quarantine、打包成 tgz（接口维度、导出维度往后放） | ✅ quarantine（ccfe973、260c9c2）、打包成 tgz（0.1.0，9d9566a） |
 | M8 | verify 提速：打包器证据（vite）、基线缓存 | ✅ 完成（e725e17） |
 | M9 | 接入另外两个项目（共 4 个：1 个 Vue2 + JS、3 个 Vue3 + TS） | ✅ 全流程跑通（只读）；router-view 插槽的 :is 不再当盲区（dbcddbb） |
@@ -42,9 +42,9 @@
 - [x] 错误处理：只有「没有匹配」才返回空，其他 git 错误都抛出
 - [x] `traceHistory`：把三部分组合成 schema 里的 History 结构，不传 pattern 时由文件最初的路径推出
 - [x] `code-audit history` 命令：参数解析，输出 JSON
-- [x] 用 finicr-web 的 13 个隔离文件实际跑一遍，和手写的头注释对比
+- [x] 用 项目 A 的 13 个隔离文件实际跑一遍，和手写的头注释对比
   - 26 项中 18 项一致；其余 8 项原因已查明：4 项是规则差异（按主线取合并提交），3 项是工具的已知限制（同目录相对路径），1 项是当初手写有误
-  - 详细对照只留在本机：`test/golden/finicr-web-history.md`
+  - 详细对照只留在本机：`test/golden/` 下的对照文件
   - 实测发现 6 个问题并已修复：非代码文件被当成引用方、没认出来的移动、把复制当成历史、
     删除后重新加入只取到最近一次、引入没统一看主线、默认 pattern 的空格和 /index
 
@@ -76,7 +76,7 @@
   - 先写到同级临时位置，全部写完再一次性改名：中途出错不留下半成品
   - 验收：两个目录结构、约定都不同的项目完整跑通（`test/acceptance.test.js`）
   - 真实项目：13 个文件完整跑通，约 34 秒；结果与上一版一致，生成的头注释与手写版关键信息一致
-    （本机：`test/golden/finicr-web-run/`）
+    （本机：`test/golden/` 下）
 
 **新规则**：schema 里的路径不允许出现 `..` 这一级。项目内的路径用不到它，而按路径生成输出文件时它会让文件写到输出目录外面。
 
@@ -207,7 +207,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   - 路径开头就是变量、包名、三元表达式：范围确定不了，记警告
 - [x] `src/rules/dynamic-load.js`：落在范围里的候选判为 `unknown`，每处加载一条证据、一条引用（`via: dynamic`）；加载方本身也是候选时在证据里注明
 - [x] ~~试验发现：knip 自己能处理模板字符串里的变量~~：**这个结论是错的**（③ 时发现）。当时 fixture 没有 package.json，knip 悄悄跳过了所有 .vue 文件，看起来像「算在用」。补上依赖声明后，模板字符串加载的 .vue 照样是候选，由本规则判为 unknown
-- [x] finicr-web：所有 `import()` 都是固定路径，没有动态加载，结果不变（58 个候选）
+- [x] 项目 A：所有 `import()` 都是固定路径，没有动态加载，结果不变（58 个候选）
 - [x] 反向检查：逐个撤掉关键逻辑（保留状态和引用、排除自己、非递归、省略扩展名、优先级、参数里的正则），每处都有测试失败
 
 ### ② external：图外使用
@@ -220,7 +220,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   - JS 类文件先去注释：注释掉的引用不算（留给 ③ dormant）；html、json 原样搜
   - 没有新增配置项：搜索范围由 sourceRoots、extensions、testEntries 推出
 - [x] `src/rules/external.js`：命中的判为 `external`，每处一条证据、一条引用（`via: config`）
-- [x] finicr-web：正好找出 M3 时人工确认的 2 个——`src/shims/fpv-excel-engine-stub.js`（vite-config/resolve.js）、`src/i18n/menu.js`（scripts/generateMenuI18n.js），没有多报
+- [x] 项目 A：正好找出 M3 时人工确认的 2 个——一个被构建配置的别名替换引用的 stub 文件、一个由生成脚本写出的文件，没有多报
 - [x] 反向检查：逐个撤掉 9 处关键逻辑（排除测试文件、去注释、左右边界、index 目录写法、带扩展名、源码目录里的非源码文件、规则注册、导出要搜的文件），每处都有测试失败
 
 ### ③ dormant：注释停用
@@ -233,7 +233,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
   - 不带引号的说明文字不算
 - [x] `src/rules/dormant.js`：命中的判为 `dormant`，引用 `via: comment`
 - [x] external 不再把 html 里注释掉的路径算成图外使用，改由 dormant 判定
-- [x] finicr-web：正好找出 M3 时人工确认的 2 个——`src/utils/browser-check.js`（main.js:84）、`src/components/ResolutionTip/index.vue`（App.vue:35）
+- [x] 项目 A：正好找出 M3 时人工确认的 2 个——一个在入口里被注释掉引用的工具文件、一个在根组件里被注释掉引用的组件
 - [x] fixture 支持在 expected.json 里写 `config`（如别名）
 - [x] 反向检查：逐个撤掉 11 处关键逻辑，每处都有测试失败
 
@@ -248,7 +248,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] 规则层分两步：先逐个文件跑规则，再顺着引用传递；候选之间的引用记进 refs（`via: static`）
 - [x] `SCAN_RULES` 挪到 `src/collect/scan-rules.js`：规则层也要用，避免和 scan.js 循环引用
 - [x] fixture `ref-chain`：external → 被它引用的、dormant → 被它引用的、互相引用、只被测试用到（含间接）、没人引用
-- [x] finicr-web：test-only 3 个（第 4 个 ResolutionTip 同时是 dormant，dormant 优先）、dead-only-ref 7 个，其中 `mixin.js` 和 M3 时人工确认的一致（只被 EchartsCom.vue 引用）
+- [x] 项目 A：test-only 3 个（第 4 个同时是 dormant，dormant 优先）、dead-only-ref 7 个，其中一个 mixin 和 M3 时人工确认的一致（只被一个没人用的图表组件引用）
 - [x] scan → history → report 全流程跑通：报告里状态汇总是 unknown 44、external 2、dormant 2、test-only 3、dead-only-ref 7
 - [x] 反向检查：逐个撤掉 11 处关键逻辑，每处都有测试失败（「不找测试引用」一开始没抓到，补了测试）
 
@@ -268,7 +268,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] `config.js`：新增 `reviewedDynamicLoads`，校验字段、理由不能空
 - [x] `rules/index.js`：没命中、没被引用的判 `dead`；dead / dead-only-ref 附上人工确认的理由
 - [x] fixture `wide-dynamic`：`import(name + '.vue')` 只圈 .vue；`dynamic-import` 的 `import(p)` 写进确认，范围外照常判
-- [x] finicr-web 全流程：dead 44、dead-only-ref 7、test-only 3、external 2、dormant 2，没有 unknown（这个项目没有路径里有变量的动态加载）；
+- [x] 项目 A 全流程：dead 44、dead-only-ref 7、test-only 3、external 2、dormant 2，没有 unknown（这个项目没有路径里有变量的动态加载）；
   人工隔离过的 13 个全部判为 dead 或 dead-only-ref，和人工结论一致
 - [x] 反向检查：逐个撤掉 9 处关键逻辑，每处都有测试失败
 
@@ -281,8 +281,8 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] 配置 `branches: { ignore, maxAgeDays }`：**由用户自己配置，不配置就全部查**（宁可多判）；不会再合回来的老版本线可以按名字（glob）排除，或按「多少天没提交」跳过
 - [x] scan 输出里列出每个分支导致了几个 pending，并提示怎么排除，方便用户决定
 - [x] `src/rules/pending.js`：证据写明分支、最后提交日期、哪个文件哪一行；顺着引用传递，被它引用的候选跟着保留
-- [x] finicr-web：5 秒查完 9 个没合并的分支，多出 12 个 pending。其中 10 个原来是 dead（verify 也说删了没问题），
-  但 master、hotfix、guangfa 分支上改过的文件还在用它们（如 `src/api/document.js` 被 `LongPromptConversation.vue` 引用）。
+- [x] 项目 A：5 秒查完 9 个没合并的分支，多出 12 个 pending。其中 10 个原来是 dead（verify 也说删了没问题），
+  但主干、hotfix 和一个部署分支上改过的文件还在用它们（如一个 api 文件被分支上的一个对话组件引用）。
   直接删的话，这些分支合回来时构建会报错——verify 只看当前分支，看不出来
   - 分布变为：dead 34、pending 12、dead-only-ref 6、test-only 2、dormant 2、external 2
 - [x] 反向检查：逐个撤掉 8 处关键逻辑，每处都有测试失败（「不从分叉点算」一开始没抓到，补了「主线后来去掉引用」的场景）
@@ -293,7 +293,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - 后果：.vue 文件不会列为候选；.vue 里的 import 也不跟进，**只被组件用到的 js 会被误报为没人用**（会导致误删的方向）
 - 会遇到的情况：monorepo 里 vue 写在子包、没有 package.json
 - 修复：scan 在临时目录的 package.json 里补上缺的依赖声明（源码里有 .vue 才补），不碰目标仓库；输出里会提示补了什么
-- finicr-web 声明了 vue，不受影响；fixture 之前没有 package.json，所以 ① 的「knip 能处理模板字符串」是误判
+- 项目 A 声明了 vue，不受影响；fixture 之前没有 package.json，所以 ① 的「knip 能处理模板字符串」是误判
 
 ---
 
@@ -308,7 +308,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 |---|---|---|
 | ① | 工作目录（导出代码、克隆依赖）、跑命令、试跑基线 | ✅ fe163a1 |
 | ② | 删掉候选后跑、和基线比较；先从报错里认出文件，认不出再对半找；结果写进 verify 字段 | ✅ 3a34279 |
-| ③ | finicr-web 实测，根据结果调整 | ✅ 一次全部通过，暂时没有要调整的；等 M6 第二个项目再看 |
+| ③ | 项目 A 实测，根据结果调整 | ✅ 一次全部通过，暂时没有要调整的；等 M6 第二个项目再看 |
 
 ### 决定
 
@@ -327,7 +327,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] `src/verify/baseline.js`：按 build、test 的顺序跑配置了的步骤，完整输出写进日志目录（不截断，见下面「已知问题排查」）
 - [x] `code-audit verify --root --profile [--rev] [--keep]`：试跑基线，确认命令能在临时目录里跑通；失败时打印最后 30 行，退出码为 1
 - [x] 配置新增 `verify`，按字段合并（只写 build 也行）
-- [x] finicr-web 实测（build: `pnpm run build:ci`，test: `pnpm test`）：
+- [x] 项目 A 实测（build: `pnpm run build:ci`，test: `pnpm test`）：
   - 准备临时目录 5 秒（1225 个文件，node_modules 克隆，不占额外磁盘）；构建成功 32 秒；测试 14 秒
   - **基线测试本来就有失败**：HEAD 上 728 个测试里 10 个失败（6 个文件）。② 不能只看退出码，要按「哪些测试失败」比较
   - 原项目 `git status`、node_modules 不变；构建产物、缓存都在临时目录里
@@ -352,13 +352,13 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - [x] `code-audit verify --in <data.json> --out <结果.json>`：输出位置检查和 history 一致；打印每轮结果和汇总
 - [x] 端到端测试：真实的 node 脚本当构建、测试命令。6 个文件里 3 个删不得（构建按文件名读取、测试在用、报错看不出是谁），6 轮全部判对
 - [x] 反向检查：逐个撤掉 10 处关键逻辑，每处都有测试失败
-- [x] finicr-web 实测：51 个（dead 44、dead-only-ref 7，绑成 44 组）一次全删，第 1 轮就和基线一致，总共 1 分半（准备 5 秒 + 基线 + 1 轮）。
+- [x] 项目 A 实测：51 个（dead 44、dead-only-ref 7，绑成 44 组）一次全删，第 1 轮就和基线一致，总共 1 分半（准备 5 秒 + 基线 + 1 轮）。
   构建通过、没有新增警告、没有新增失败的测试（基线本来失败的 10 个不变）；目标项目 `git status` 不变、临时目录没有残留。
   报告里 51 个显示「删除后与基线一致」，其余 7 个（external、dormant、test-only）不验证
 
 ## M6 接入第二个项目 ✅
 
-findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用 unplugin-vue-components 自动注册组件。
+项目 B：Vue3 + TypeScript，453 个文件，没有测试脚本，用 unplugin-vue-components 自动注册组件。
 配置只写了入口、别名、构建命令（本机 profile，不入库）：
 
 ```js
@@ -367,23 +367,23 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 ### 发现并修复：Vue 全局注册的组件
 
-- 现象：第一次 scan 只找出 3 个候选。`KatexRender`、`BasicModal` 全项目没人用，却没被找出来
+- 现象：第一次 scan 只找出 3 个候选。两个全局组件全项目没人用，却没被找出来
 - 原因：tsconfig 把 `src/components.d.ts`（unplugin-vue-components 生成的声明文件）列为源文件，
   knip 把里面的 `typeof import('./components/X/index.vue')` 当成引用：登记过的组件一律算在用。
   对照实验：不导出声明文件，或者不导出 tsconfig.json，结果都变成 8 个
-- 只拿掉声明文件也不对：`BasicSearch` 等组件只在模板里写标签（`<BasicSearch>`），knip 看不到，会被误报为没人用
+- 只拿掉声明文件也不对：有的组件只在模板里写标签（`<SomeComp>`），knip 看不到，会被误报为没人用
 - 修复（`src/collect/global-components.js`，通用：只认 Vue 的 `interface GlobalComponents` 声明）：
   - 读出声明文件里登记的本地组件（第三方组件、提交里不存在的不算）
   - scan 的临时目录里不放声明文件
   - 在各 .vue 的模板里找标签（大驼峰、短横线写法），在临时目录的拷贝里给用到的文件补 import（插在 `<script>` 那一行，行号不变），knip 顺着真实的引用关系走
   - 候选之间的标签用法也算引用（只被没人用的页面用到的组件判 dead-only-ref）；测试文件里的标签算测试引用
-- 结果：候选 5 个（dead 4、pending 1）：`BasicModal`、`KatexRender`、`GuideSteps`、`refreshToken.ts`，grep 交叉核对全部没人用；
-  `src/api/auth.ts` 被 `origin/dev_2.6.0.guangfa` 分支改过、还在用，判 pending
+- 结果：候选 5 个（dead 4、pending 1）：dead 是 3 个组件和 1 个工具文件，grep 交叉核对全部没人用；
+  一个 api 文件被一个部署分支改过、还在用，判 pending
 - 声明文件里登记了 16 个组件，9 个是按模板标签用的
 
 ### 发现并修复：history 把 .d.ts 算成引用方
 
-- 现象：`KatexRender` 的历史显示「仍被引用」，引用方是 `src/components.d.ts`
+- 现象：一个全局组件的历史显示「仍被引用」，引用方是 `src/components.d.ts`
 - 修复：history 找引用方时排除 `*.d.ts`：类型声明构建后不存在，里面的路径不是运行时的使用
 
 ### 全流程结果
@@ -397,7 +397,7 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 唯一会改动目标项目的命令。默认只打印计划，加 `--apply` 才执行。
 
-**约定：测试用的项目（finicr-web、findip-portal-web）只打印计划，不执行 `--apply`、不在里面建分支。**
+**约定：测试用的项目（项目 A、项目 B）只打印计划，不执行 `--apply`、不在里面建分支。**
 `--apply` 的执行、提交、撤回只在测试里临时建的仓库上验证。
 
 决定（2026-11-09 和用户确认）：
@@ -406,7 +406,7 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
   建议开发人员先提交暂存好的改名、再提交其余改动（一起提交的话小文件可能被当成删了再新建）
 - 只隔离 dead / dead-only-ref 并且实删验证通过的；没跑 verify 的不隔离
 - ~~隔离区默认集中放在 `<第一个源码目录>/_deprecated`~~ → 改为**就近隔离**（2026-11-09 用户决定）：放进文件所在目录下的 `_deprecated`
-  （`src/components/echarts/EchartsCom.vue` → `src/components/echarts/_deprecated/EchartsCom.vue`）。集中隔离保留为 `layout: 'central'`
+  （`src/components/chart/Chart.vue` → `src/components/chart/_deprecated/Chart.vue`）。集中隔离保留为 `layout: 'central'`
 - lint 等工具配置不自动改，计划里列出要手动加的那一行
 
 实现：
@@ -425,13 +425,13 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 - [x] 反向检查：逐个撤掉 12 处关键逻辑，每处都有测试失败
 - [x] 就近隔离（`quarantine: { layout: 'nearby', dirName: '_deprecated' }`，默认）
   - 评估：和团队现有习惯一致（`src/utils/_deprecated` 就是「目录 + _deprecated」），恢复只要往上挪一层，lint / tsconfig 一条 `**/_deprecated/**` 全覆盖；
-    代价是目录分散（finicr-web 27 个文件分在 18 个目录）
+    代价是目录分散（项目 A 27 个文件分在 18 个目录）
   - **风险及处理**：挪进子目录后可能被批量加载重新圈到（实验：`views/a/_deprecated/Old.vue` 会被 `import.meta.glob('../views/**/*.vue')` 圈到，
     `store/modules/_deprecated/old.js` 会被 `require.context('./modules', true, /\.js$/)` 圈到——已隔离的页面又被注册成路由、打包进去）。
     `src/quarantine/recapture.js`：对每个新位置查 import.meta.glob（含换算不了的）、拼接路径的 import / require、require.context，会被圈到的不移、写明是哪一处；人工确认过的动态加载不算
   - README 每个隔离目录一份；`glob-imports.js` 新增 `globToRegExp`（支持 `**`、`{a,b}`、`(a|b)`）
   - 反向检查：逐个撤掉 6 处关键逻辑，每处都有测试失败（「不认 (a|b)」一开始没抓到，补了测试）
-- [x] finicr-web 试跑（只打印计划，不 --apply）：重新 scan → history → verify，40 个 dead / dead-only-ref 一次实删通过
+- [x] 项目 A 试跑（只打印计划，不 --apply）：重新 scan → history → verify，40 个 dead / dead-only-ref 一次实删通过
   - **发现并修复**：人工隔离区 `src/utils/_deprecated/` 里的 13 个文件，被计划再移进默认隔离区，变成 `src/_deprecated/utils/_deprecated/…`（隔离区套隔离区）。
     现在路径里有一段和隔离区目录同名的（如 `_deprecated`）都算已经隔离，不再移
   - 集中隔离 `src/_deprecated`：隔离 27 个，改 12 处相对路径（都改成 `@/…`）；沿用现有的 `src/utils/_deprecated`（base `src/utils`）：0 个——剩下的 27 个都不在 utils 下
@@ -579,8 +579,8 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 `global-components.js`、`glob-imports.js`、`external-refs.js`、`comment-refs.js`、`branch-refs.js` 各自补上对应的部分。
 
 实测：
-- finicr-web：状态分布不变；`ResolutionTip` 多一条证据（`App.vue:12` 的模板注释里有 `<ResolutionTip>`）
-- findip-portal-web：项目里有 12 处 `:is="变量"`，`BasicModal`、`KatexRender` 从 dead 变为 unknown（它们是全局组件，排除不了某个变量的值正好是它）。
+- 项目 A：状态分布不变；一个组件多一条证据（根组件的模板注释里有它的标签）
+- 项目 B：项目里有 12 处 `:is="变量"`，2 个全局组件从 dead 变为 unknown（它们是全局组件，排除不了某个变量的值正好是它）。
   人工确认这 12 处都只会是图标、路由组件后，写进 `reviewedDynamicLoads` 才会回到 dead
 - 反向检查：逐个撤掉 18 处关键逻辑，每处都有测试失败
 
@@ -612,10 +612,10 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 | 项目 | 结果 |
 |---|---|
-| finicr-web（Vite 3，vite.config.js，打成 CJS） | 记录 1 次构建、742 个源码文件；40 个候选都不在里面（和 knip 一致）；1 轮通过，90 秒 |
+| 项目 A（Vite 3，vite.config.js，打成 CJS） | 记录 1 次构建、742 个源码文件；40 个候选都不在里面（和 knip 一致）；1 轮通过，90 秒 |
 | 同上，重跑 | 复用基线，**47 秒** |
-| 对照：把在用的 `src/api/aiAsset.js` 故意标成 dead | 关掉打包器证据：3 轮、2 分 19 秒；打开：直接判 unknown，1 轮、48 秒 |
-| findip-portal-web（Vite 5，vite.config.ts） | 第一次失败：构建前的 eslint 检查到生成的配置（prettier、curly）→ 生成的配置开头加 `/* eslint-disable */`、`// @ts-nocheck`，并加上「失败就撤掉重跑」的兜底。之后记录 187 个源码文件，1 轮通过，复用基线 30 秒 |
+| 对照：把一个在用的 api 文件故意标成 dead | 关掉打包器证据：3 轮、2 分 19 秒；打开：直接判 unknown，1 轮、48 秒 |
+| 项目 B（Vite 5，vite.config.ts） | 第一次失败：构建前的 eslint 检查到生成的配置（prettier、curly）→ 生成的配置开头加 `/* eslint-disable */`、`// @ts-nocheck`，并加上「失败就撤掉重跑」的兜底。之后记录 187 个源码文件，1 轮通过，复用基线 30 秒 |
 
 对照实验里报错能认出是哪个文件，所以只多 2 轮；认不出时要对半找，差得更多。
 
@@ -638,17 +638,17 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 能力边界里**没改、写进 README** 的：JS API 内联配置拿不到列表；Web Worker 的子构建不经过主配置的插件；按文件名配置的 lint、tsconfig 会让改名后的原配置过不了检查（走撤掉重跑）；只有 test-only 这类时不专门跑构建；缓存键不含环境变量。
 
-每处修复都反向检查过（改回去有测试失败）。两个项目用 `--fresh` 重跑，结论不变：finicr-web 742 个模块，误判对照的 aiAsset 判 unknown、1 轮通过，原有的 12 个 pending、2 个 test-only、2 个 dormant 都不矛盾；findip-portal-web 187 个模块、1 轮通过。测试 457 → 464。
+每处修复都反向检查过（改回去有测试失败）。两个项目用 `--fresh` 重跑，结论不变：项目 A 742 个模块，误判对照的那个 api 文件判 unknown、1 轮通过，原有的 12 个 pending、2 个 test-only、2 个 dormant 都不矛盾；项目 B 187 个模块、1 轮通过。测试 457 → 464。
 
 ### 审核发现并修复（两个 P1）
 
 | 问题 | 修复 |
 |---|---|
 | scan、quarantine 只看源码目录里的加载：构建配置、脚本等目录外文件里的 `import.meta.glob`、拼接路径的 `import()` 不查，`findExternalRefs` 只认写明的路径、不认 glob。目录外 glob 加载的页面可能被判 dead，隔离后又被加载回来 | 目录外的代码文件（`outsideCode`，测试文件除外）一起找 glob、动态加载：glob 换算成 knip 入口，拼接路径的圈范围判 unknown；隔离时同样查。这些文件一律当成在用 |
-| 跟着上一条出现的：finicr-web 的 `cli/` 里有 `require(path.join(ROOT, 'package.json'))`，按原来的算法确定不了目录，会把所有候选判 unknown | `path.join` / `path.resolve` 各段算得出时，范围就是算出来的路径（`scope.paths`）；源码目录外的这类写法本来就由 findExternalRefs 判 external，不再当动态加载 |
+| 跟着上一条出现的：项目 A 的构建脚本里有 `require(path.join(ROOT, 'package.json'))`，按原来的算法确定不了目录，会把所有候选判 unknown | `path.join` / `path.resolve` 各段算得出时，范围就是算出来的路径（`scope.paths`）；源码目录外的这类写法本来就由 findExternalRefs 判 external，不再当动态加载 |
 | 隔离出错撤回时，没被 git 跟踪的已有 README 被追加后不会恢复（`git reset` 管不到），人工写的内容丢失 | 追加前记下原内容，撤回时写回 |
 
-每处反向检查过（9 处改回去都有测试失败）。两个项目新旧版本 scan 对比：finicr-web 58 个、findip-portal-web 5 个候选，状态完全一致。测试 464 → 468。
+每处反向检查过（9 处改回去都有测试失败）。两个项目新旧版本 scan 对比：项目 A 58 个、项目 B 5 个候选，状态完全一致。测试 464 → 468。
 
 ## 修已知问题、去掉定制化、打包（9d9566a）
 
@@ -658,13 +658,13 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
   在空目录里 `npm install` tgz：3 秒装完，knip 跟着装上；用装好的命令在临时仓库上跑通 scan → history → verify → report → quarantine 计划
 - 示例配置不再 import 工具内部的文件（复制到别处也能用）
 - 反向检查：逐个撤掉这一批的 14 处关键逻辑，每处都有测试失败
-- 用两个项目重跑对比（只读）：两个项目的状态都没变；finicr-web 的 history 变了 23 个，大多是改进
+- 用两个项目重跑对比（只读）：两个项目的状态都没变；项目 A 的 history 变了 23 个，大多是改进
   （以前漏掉的同目录 `./x` 引用找到了；同名目录、接口地址的误匹配没了；dead-only-ref 正确显示「仍被（没人用的文件）引用」；19 个补上分支上的作者，15 个时间线记了引用方改名）
   - **重跑时发现并修复两处**：
-    - 文件名带前导空格（`src/utils/ setting.js`）的引用被当成文字丢掉 → 只有注释、报错这类文字里带空格的才当句子，import 里的照常解析
+    - 文件名带前导空格（`src/utils/ x.js`）的引用被当成文字丢掉 → 只有注释、报错这类文字里带空格的才当句子，import 里的照常解析
     - 目标改名后，旧路径上又新建了同名文件，引用新文件的被算成引用目标（以前按字面搜也有这个问题）→ 每个提交只用目标当时所在的路径比对；目标自己改名的提交也拍快照
-  - 和人工隔离时记下的 13 个文件对照：**全部一致**。docxPreview 的失去引用提交号不同（`378b2fbd` vs `09d5ea5c`），
-    是因为工具按主线记（378b2fbd 是把 09d5ea5c 合并进主线的合并提交），同一处改动
+  - 和人工隔离时记下的 13 个文件对照：**全部一致**。其中 1 个文件的失去引用提交号不同，
+    是因为工具按主线记（记的是把分支合并进主线的合并提交，人工记的是分支上的提交），同一处改动
 
 ## 已知问题
 
@@ -683,7 +683,7 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 
 已确认不是问题：
 
-- ~~`refsAt` 对每个候选文件执行一次 `git show`，大仓库可能慢~~：finicr-web 实测每个文件约 3 秒，13 个共 34 秒
+- ~~`refsAt` 对每个候选文件执行一次 `git show`，大仓库可能慢~~：项目 A 实测每个文件约 3 秒，13 个共 34 秒
 
 已修复：
 
@@ -751,4 +751,4 @@ findip-portal-web：Vue3 + TypeScript，453 个文件，没有测试脚本，用
 | c3d399c | history：查找引入提交 |
 | fc0491a | history：引用时间线与失去引用；去掉注释后判断引用 |
 | 53fc34e | 补全数据格式校验，修复注释剥离、git 错误处理与改名排除 |
-| d4a518a | history 命令接入命令行；修复 finicr-web 实测发现的 6 个问题 |
+| d4a518a | history 命令接入命令行；修复 项目 A 实测发现的 6 个问题 |
