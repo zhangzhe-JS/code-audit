@@ -24,7 +24,8 @@ import { buildLookup, resolveSpec } from '../collect/path-refs.js'
 import { compileCalls } from './rules.js'
 import { extractFile, loadParser, MODULE, TEMPLATE } from './extract.js'
 import { endpointKey, isExternalPath, mayHit } from './normalize.js'
-import { createMenuFinder } from './menus.js'
+import { createMenuFinder, vuexModuleResolver } from './menus.js'
+import { WHOLE_STORE } from './stores.js'
 import { findGlobalComponents, findTagUses } from '../collect/global-components.js'
 
 export const API_SCHEMA_VERSION = 1
@@ -103,6 +104,8 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   const callers = findCallers({ parsed, unreachable, aliases: config.aliases })
   // 走不到的文件里的引用方：没人用的定义「仍被没人用的文件引用」，history 要查的是这些文件什么时候失去入口
   const deadCallers = findCallers({ parsed, unreachable, aliases: config.aliases, onlyUnreachable: true })
+  // 请求写在 store 的 action 里：store 在用、这个 action 没人调用的，定义判没人用
+  const actionState = createActionChecker({ parsed, unreachable, callers, aliases: config.aliases })
 
   // 4. 定义 → 接口
   const wrapperNames = new Set(calls.map((c) => c.steps[0].name))
@@ -131,7 +134,8 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
     }
     for (const s of p.sites) {
       const fn = fnName(s.owners)
-      const state = defState(p.path, s.owners, fileState, usedNames.get(p.path))
+      let state = defState(p.path, s.owners, fileState, usedNames.get(p.path))
+      if (state.status === 'live' && !fileState) state = actionState(p, s) ?? state
       let method = s.method
       let path = s.path
       let rule = s.rule
@@ -243,6 +247,52 @@ export function usedBindings(p, unused) {
     }
   }
   return used
+}
+
+/**
+ * store 的 action 有没有人调用（请求写在 action 里时）。看不清的返回 null（按 store 判断，不改）
+ * - Pinia：所有走得到的文件里，按名字（导出名、各引用方里的本地名，都要是 use 开头）汇总 useX() 的用法；
+ *   有看不清的用法（整个 store 被传走等）、store 在自己文件里被别的代码用到，都不判
+ * - Vuex：模块要能从注册关系算出命名空间；项目里有算不出类型的派发（dispatch(变量)、mapActions(变量)）时都不判；
+ *   不带命名空间的同名派发（dispatch('a')）也算调用了
+ */
+export function createActionChecker({ parsed, unreachable, callers, aliases }) {
+  const live = parsed.filter((p) => !unreachable.has(p.path))
+  const usesByName = new Map()
+  const dispatch = { plain: new Set(), ns: new Set(), dynamic: false, where: null }
+  for (const p of live) {
+    for (const [n, set] of p.piniaUses ?? []) usesByName.set(n, new Set([...(usesByName.get(n) ?? []), ...set]))
+    for (const a of p.storeDispatch?.plain ?? []) dispatch.plain.add(a)
+    for (const a of p.storeActionUses ?? []) dispatch.ns.add(a)
+    if (p.storeDispatch?.dynamic && !dispatch.dynamic) {
+      dispatch.dynamic = true
+      dispatch.where = p.path
+    }
+  }
+  const vuex = vuexModuleResolver({ parsed, aliases, lookup: buildLookup(parsed.map((p) => p.path)) })
+  const isUse = (n) => /^use[A-Z0-9_$]/.test(n)
+  return (p, site) => {
+    if (site.storeActions && site.store) {
+      const b = site.store
+      if ([...p.bindings].some(([n, x]) => n !== b && x.refs.has(b))) return null
+      const names = new Set([...(p.bindings.get(b)?.exported ?? [])].filter((e) => e !== 'default'))
+      if (b !== 'default') names.add(b)
+      for (const c of callers.get(`${p.path}#${b}`) ?? []) for (const l of c.locals) names.add(l)
+      if (names.size === 0 || [...names].some((n) => !isUse(n))) return null
+      const used = new Set([...names].flatMap((n) => [...(usesByName.get(n) ?? [])]))
+      if (used.has(WHOLE_STORE) || site.storeActions.some((a) => used.has(a))) return null
+      const what = site.storeActions.length > 0 ? `走到这里的 action（${site.storeActions.join('、')}）没有地方调用` : '这段代码不在任何对外交出的 action 里，也没有被它们调用'
+      return { status: 'dead', reason: `store ${b} 在用，但${what}（找过 ${[...names].join('、')}() 的成员调用、解构、mapActions、模板里的写法）` }
+    }
+    if (site.vuexAction) {
+      const ns = vuex.nsOf(p.path)
+      if (!ns || dispatch.dynamic) return null
+      const a = site.vuexAction
+      if (dispatch.plain.has(a) || dispatch.ns.has(`${ns}/${a}`)) return null
+      return { status: 'dead', reason: `Vuex 模块 ${ns} 在用，但 action ${a} 没有地方派发（找过 dispatch('${ns}/${a}')、mapActions('${ns}', [...])、不带命名空间的 dispatch('${a}')）` }
+    }
+    return null
+  }
 }
 
 function defState(file, owners, fileState, used) {

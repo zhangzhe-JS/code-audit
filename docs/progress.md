@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-12
-- 测试：537 个，全部通过（`npm test`）
+- 测试：541 个，全部通过（`npm test`）
 
 ---
 
@@ -667,7 +667,7 @@ stdio 传输、每行一条 JSON-RPC 2.0，不依赖 SDK；initialize、tools/li
 
 - 只看前端代码：外部系统的调用看不到，删除前后端要看网关日志
 - check 里函数改了名、同时改了地址：显示成「不再定义」加「新增」，不会提示地址改了
-- 定义的粒度是顶层函数：对象里的方法（Pinia / Vuex 的 action）随对象判断
+- 定义的粒度是顶层函数；请求直接写在 Pinia / Vuex 的 action 里时细到 action（见 M17）。请求写在 api 文件、由 action 调用的，仍按 api 函数有没有被 import 判断
 - 写在配置对象里交给 SDK 的地址、运行时拼出的地址认不出（覆盖报告会列出算不出的）
 - 历史按函数追溯，地址搬到新函数后显示新函数的定义时间
 - 菜单归属第一步按名字追，再往上按文件连：被很多页面引用的工具文件会让使用方多算（不会少算）；引用链断在运行时拼出的组件名、事件总线等看不到的地方时写「未归属」
@@ -941,3 +941,26 @@ stdio 传输、每行一条 JSON-RPC 2.0，不依赖 SDK；initialize、tools/li
 - 纯函数名单外的调用一律当有副作用：偏保守（少建议删，不会误删）
 - 作为参数传进去的回调一律当加载时会执行（`setTimeout(cb)`、`load().then(cb)`）：偏保守（多算在用）
 - 类只看 extends、计算属性名、静态字段和静态块；装饰器没算
+
+## M17 接口状态细到 store 的 action ✅
+
+原来请求写在 Pinia store 的 action 里时，只要 store 在用就算在用（项目 B、C 各有一条：登录写在 store 的 login 里，整个项目没人调用 login）。
+
+- `src/api/stores.js`：
+  - `piniaStores`：`defineStore` 定义的 store，每个 action 的代码范围，以及调用哪些对外 action 会走到它。setup 写法顺着内部函数的调用走（a 调用 b，b 里的请求算 a 的）；选项写法顺着 `this.b()` 走。
+    store 创建时就执行的、被当成值交出去的（`watch(x, f)`）、getters 里调用的、`this[name]`、return 不是对象字面量，都记「看不清」
+  - `storeUses`：文件怎么用 store，按调用的名字记（只记 `use` 开头的）：成员、解构、`mapActions(useX, [...])`、`const s = useX()` 之后的 `s.a`、单文件组件模板里的 `s.a`；`storeToRefs(s)` 不涉及 action；其余记「看不清」
+- extract：请求记下在哪些 action 里（Pinia：`storeActions`；Vuex：`vuexAction`）；不带命名空间的 `dispatch('a')`、`mapActions(['a'])` 记名字，`dispatch(变量)` 记「有算不出的派发」
+- scan（`createActionChecker`）：store 在用、走到这个请求的 action 都没人调用 → 定义判 dead，原因写明找过哪些名字和写法
+  - Pinia：所有走得到的文件里按名字汇总（导出名 + 各引用方里的本地名，都要是 `use` 开头），自动导入、`import()` 后 `m.useX()` 也按名字认到；
+    有看不清的用法、store 在自己文件里被别的代码用到，都不判
+  - Vuex：模块要能从 `modules: { ns: 模块 }` 算出命名空间；项目里有任何算不出的派发就都不判；同名的不带命名空间派发也算调用
+
+真实项目：项目 B、C 的 `POST /auth/login` 从在用改为没人用，和人工基准一致（一致数 B 28→29、C 45→46）；项目 A、D 没有变化，也没有出现基准在用、工具判没人用的。
+反向检查：逐个撤掉 19 处关键逻辑，每处都有测试失败。
+
+近似和误差方向：
+- 按名字汇总、不分作用域：同名的变量、别处同名的 `useX` 都算用法，偏多（偏保守）
+- 用法只认 `use` 开头的名字：不是的整个不判（偏保守）
+- 同一个 Vuex 模块注册在两个命名空间下时只认第一个：派发到第二个命名空间的会漏看（会误判没人用，少见）
+- 请求写在 api 文件、由 action 调用的，不细到 action（还是看 api 函数有没有被 import）

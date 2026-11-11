@@ -8,6 +8,7 @@
  * - bindings  顶层名字：导出成什么名字、引用了同文件的哪些顶层名字（用来判断「本文件内部在用」）
  * - imports / reexports  用来找引用方
  */
+import { piniaStores, storeUses } from './stores.js'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { scriptOnly, SFC_EXTENSIONS } from '../collect/source-text.js'
@@ -76,7 +77,8 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   // storeUses：用到的 Vuex 命名空间（dispatch('ns/x')、mapActions('ns') 等）；storeModules：这个文件里注册的 Vuex 模块（modules: { ns: 模块 }）
   // storeActionUses：用到的具体 action（ns/action）；storeActions：这个文件里的 Vuex actions 各自引用了哪些导入的名字
   // declLines：顶层名字声明在第几行（导出维度的报告用）；reexports 里也记下行号
-  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), initCalls: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], errors: [] }
+  // piniaUses：这个文件怎么用 Pinia store（useX 的名字 → 用到的成员，看不清的含 '*'）；storeDispatch：不带命名空间派发的 action 名、有没有算不出的派发
+  const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), initCalls: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], storeDispatch: { plain: new Set(), dynamic: false }, piniaUses: new Map(), errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
@@ -86,6 +88,8 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
     collectStoreActions(program, result, parser.visitorKeys)
     const consts = topLevelConsts(program)
     walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys: parser.visitorKeys })
+    markStoreActions(program, result, parser.visitorKeys)
+    result.piniaUses = storeUses(program, parser.visitorKeys, isReference, isSfc ? markupOf(content)?.[1] ?? null : null)
     for (const c of addressConsts) {
       if (c.from && c.from !== path) continue
       const init = consts.get(c.name)
@@ -483,7 +487,6 @@ function flattenScope(frames) {
  */
 function collectStoreActions(program, result, keys) {
   const locals = new Set(result.imports.flatMap((i) => i.specifiers.map((sp) => sp.local)))
-  if (locals.size === 0) return
   const objects = []
   const visit = (n) => {
     if (!n || typeof n.type !== 'string') return
@@ -512,8 +515,31 @@ function collectStoreActions(program, result, keys) {
         }
       }
       walk(pr.value)
-      result.storeActions.push({ name, refs: [...refs] })
+      result.storeActions.push({ name, refs: [...refs], start: pr.value.start, end: pr.value.end })
     }
+  }
+}
+
+/**
+ * 请求写在 store 的 action 里：记下是哪些 action（scan 再看这些 action 有没有人调用）
+ * - Pinia（defineStore）：site.storeActions = 走到这段代码的对外 action（[] = 哪个 action 都走不到）；store 创建时就执行等看不清的不记
+ * - Vuex（actions: { a() {} }）：site.vuexAction = action 名
+ */
+function markStoreActions(program, result, keys) {
+  const stores = piniaStores(program, keys)
+  for (const site of result.sites) {
+    if (typeof site.start !== 'number') continue
+    const own = stores.filter((st) => site.owners.includes(st.binding))
+    for (const st of own) {
+      const unit = st.units.find((u) => site.start >= u.start && site.start < u.end)
+      if (unit && unit.actions) {
+        site.storeActions = unit.actions
+        site.store = st.binding
+      }
+    }
+    if (own.length > 0) continue // Pinia 的 actions 不按 Vuex 认
+    const va = result.storeActions.find((a) => typeof a.start === 'number' && site.start >= a.start && site.start < a.end)
+    if (va) site.vuexAction = va.name
   }
 }
 
@@ -545,14 +571,25 @@ function collectLinks(n, result) {
       result.storeUses.add(first.slice(0, first.lastIndexOf('/')))
       if (callee === 'dispatch') result.storeActionUses.add(first)
     }
+    // 不带命名空间的派发（模块里的 dispatch('b')、根 store、没开 namespaced 的模块）只记名字；派发的类型算不出的记下来
+    if (callee === 'dispatch' && n.arguments.length > 0) {
+      if (first === null) result.storeDispatch.dynamic = true
+      else if (!first.includes('/')) result.storeDispatch.plain.add(first)
+    }
+    if (callee === 'mapActions' && n.arguments.length > 0 && first === null) {
+      const arg = n.arguments[0]
+      const names = arg.type === 'ArrayExpression' ? arg.elements.map(stringValue) : arg.type === 'ObjectExpression' ? arg.properties.map((pr) => (pr.type === 'Property' ? stringValue(pr.value) : null)) : [null]
+      // mapActions(useX, ...) 是 Pinia 的写法，另外认
+      if (!(arg.type === 'Identifier')) for (const a of names) a === null ? (result.storeDispatch.dynamic = true) : result.storeDispatch.plain.add(a)
+    }
     if (first !== null && STORE_HELPERS.has(callee)) {
       const ns = first.replace(/\/+$/, '')
       result.storeUses.add(ns)
       // mapActions('ns', ['a', 'b']) / mapActions('ns', { x: 'a' })：具体用到哪些 action
       const second = n.arguments[1]
       if (callee === 'mapActions' && second) {
-        const names = second.type === 'ArrayExpression' ? second.elements.map(stringValue) : second.type === 'ObjectExpression' ? second.properties.map((pr) => (pr.type === 'Property' ? stringValue(pr.value) : null)) : []
-        for (const a of names) if (a) result.storeActionUses.add(`${ns}/${a}`)
+        const names = second.type === 'ArrayExpression' ? second.elements.map(stringValue) : second.type === 'ObjectExpression' ? second.properties.map((pr) => (pr.type === 'Property' ? stringValue(pr.value) : null)) : [null]
+        for (const a of names) a === null ? (result.storeDispatch.dynamic = true) : result.storeActionUses.add(`${ns}/${a}`)
       }
     }
   } else if (n.type === 'MemberExpression' && n.computed && n.object.type === 'MemberExpression' && !n.object.computed && n.object.property.name === 'getters') {
@@ -602,7 +639,7 @@ function handleCall({ node, owners, scope, calls, prefixes, ignore, lineOf, resu
       markChain(node, consumed)
       const url = evaluateUrl(m.url, scope)
       const methods = resolveMethod(m.method, rule, scope) // null = 写了方法但算不出
-      for (const s of sitesFor({ url, methods, prefixes })) result.sites.push({ line: lineOf(node.start), owners: [...owners], rule: rule.call, ...s })
+      for (const s of sitesFor({ url, methods, prefixes })) result.sites.push({ line: lineOf(node.start), start: node.start, owners: [...owners], rule: rule.call, ...s })
       return
     }
   }

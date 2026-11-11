@@ -193,7 +193,7 @@ export function createMenuFinder({ parsed, unreachable, aliases, menus, callers,
  * Vuex 的命名空间 → 模块文件：从没有被别的模块注册过的注册表（根 store）开始，按 a/b/c 一层层找；
  * 找不到完整路径时用能找到的最深的那一层
  */
-function vuexModuleResolver({ parsed, aliases, lookup }) {
+export function vuexModuleResolver({ parsed, aliases, lookup }) {
   const registry = new Map() // 文件 → 名字 → 模块文件
   for (const p of parsed) {
     if (!p.storeModules?.length) continue

@@ -388,6 +388,9 @@ node bin/code-audit.js api-report --in reports/a/api.json --in reports/b/api.jso
 
 - 接口标识 = 方法 + 路径模板：查询参数不区分，路径参数统一为 `{}`，开头的服务地址变量、规则里的前缀去掉
 - 在不在用：定义所在的文件从入口走得到，并且所在的顶层函数在用（导出被引用，或被同文件在用的代码调用）；文件走不到时照搬文件维度的状态（pending、unknown 等）
+- 请求直接写在 store 的 action 里时细到 action：Pinia（`defineStore` 的选项写法、setup 写法）看 `useX().a()`、`const s = useX(); s.a()`、解构、`mapActions(useX, [...])`、模板里的 `s.a`；
+  Vuex 模块看 `dispatch('ns/a')`、`mapActions('ns', [...])`、不带命名空间的 `dispatch('a')`。store 在用、这个 action 没人调用的判没人用。
+  看不清的按 store 判：整个 store 被交出去、`s[name]`、`mapStores`、store 不叫 `use…`、项目里有 `dispatch(变量)` 等
 - **覆盖报告**：像请求却没有规则命中的调用、地址由参数传入的封装函数、算不出地址的定义。按它补规则，直到清零。规则可以让模型读项目（请求封装、环境配置、几份 api 文件）后生成，人审核
 - `--history`：没人用的接口查主线上删掉调用的提交（删的文件当时 import 了定义所在的模块），合并提交补上分支上的提交；仍被走不到的文件引用的，查那个文件什么时候失去入口；都没有的记为从没被调用
 - `api-report` 的结论：在用 / C 保留（SDK）/ C 高风险（pending、unknown 等）/ B 需审核（证据不够硬、规则没补全）/ A 可删。`endpoints.csv` 带 BOM，Excel 直接打开，留了「后端处理意见」一列
@@ -455,4 +458,5 @@ git status --short       # 确认列表里没有上面这些目录
 | M13 | 改之前先看风险：check、query、mcp、CI 模板 |
 | M14 | context：生成 profile 的材料（交给任意大模型） |
 | M15 | 打包器证据：webpack、vue-cli 适配器 |
-| 以后 | 菜单归属按名字往上追、Pinia / Vuex action 粒度、接入大模型生成规则 |
+| M16 | 菜单归属按名字往上追；接口状态细到 Pinia / Vuex 的 action |
+| 以后 | 接入大模型生成规则 |
