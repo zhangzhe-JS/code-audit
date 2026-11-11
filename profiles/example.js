@@ -55,5 +55,25 @@ export default {
   // verify 在临时目录里跑的命令（没有默认值），必须能无人值守跑完
   // bundler 可选：基线构建时记下打包器加载过的模块，加载过的候选不删（判 unknown）；目前支持 vite
   // 配置文件不在默认位置（vite.config.*）时加 bundlerConfig: 'web/vite.config.ts'
-  verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800, bundler: 'vite' }
+  verify: { build: 'npm run build', test: 'npm test', timeoutSeconds: 1800, bundler: 'vite' },
+
+  // ---------- api（接口维度）用 ----------
+  // 请求是怎么发出去的。照着代码写，参数换成占位：url 地址、method 方法、_ 任意参数、... 后面还有参数、* 取 HTTP 方法名
+  // 没有默认值：各项目的请求封装不同。可以让模型读请求封装和几份 api 文件后生成，人审核；跑 code-audit api 看覆盖报告，按它补到清零
+  api: {
+    version: 1, // 改了规则就加 1
+    calls: [
+      { call: 'request({url, method})', defaultMethod: 'GET' },
+      { call: 'http.*(url, ...)' },
+      { call: 'upload(url, ...)', method: 'POST' }
+    ],
+    attrs: [{ tag: 'el-upload', attr: 'action', method: 'POST' }], // 模板里写地址的属性（按项目用的组件库写）
+    consts: [{ name: 'UPLOAD_URL', method: 'POST' }], // 写着接口地址的顶层常量
+    prefixes: ['/api'], // 去掉的网关前缀
+    ignoreCalls: ['showToast'], // 参数像路径、但不是请求的调用
+    manual: [{ from: 'src/utils/sse.js', fn: 'openStream', method: 'POST', path: '/stream/chat', reason: '地址在别的函数里拼好再传进来' }],
+    reviewedDynamic: [{ from: 'src/utils/image.js', fn: 'loadImage', reason: '地址是后端返回的图片链接' }],
+    sdk: [{ method: 'POST', path: '/login', package: '@your/auth-sdk', via: ['createAuth'], note: 'SDK 内部发的登录请求' }],
+    examples: [{ raw: '/order/list?page=1', expect: 'GET /order/list' }] // 规则自带的测试，每次扫描先跑
+  }
 }

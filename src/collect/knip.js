@@ -209,9 +209,10 @@ export function assertOnlyCompilerPlugins(enabled) {
  * @param {{bin: string, dir: string}} opts.knip findKnip 的结果
  * @param {string} opts.root 仓库根目录（绝对路径）
  * @param {object} opts.config buildKnipConfig 的结果
- * @returns {{unusedFiles: string[], enabledPlugins: string[]}}
+ * @param {boolean} [opts.exports] 同时报出没人用的导出（接口维度用）
+ * @returns {{unusedFiles: string[], enabledPlugins: string[], unusedExports?: Map<string, Set<string>>}}
  */
-export function runKnip({ knip, root, config }) {
+export function runKnip({ knip, root, config, exports = false }) {
   if (!existsSync(root) || !statSync(root).isDirectory()) throw new Error(`仓库目录不存在：${root}`)
   // 传真实路径：目录经过符号链接时（如 macOS 的 /var → /private/var），knip 列文件用的是链接路径，
   // 解析 import 得到的是真实路径，两边对不上，所有文件都会被误报为走不到
@@ -232,7 +233,7 @@ export function runKnip({ knip, root, config }) {
           knip.bin,
           '--directory', realRoot,
           '--config', configFile,
-          '--include', 'files',
+          '--include', exports ? 'files,exports,nsExports' : 'files',
           '--reporter', 'json',
           '--output-file', `json=${resultFile}`,
           '--no-exit-code',
@@ -262,7 +263,9 @@ export function runKnip({ knip, root, config }) {
     } catch (e) {
       throw new Error(`读不到 knip 的结果（${e.message}）`)
     }
-    return { unusedFiles: parseUnusedFiles(result), enabledPlugins }
+    const out = { unusedFiles: parseUnusedFiles(result), enabledPlugins }
+    if (exports) out.unusedExports = parseUnusedExports(result)
+    return out
   } finally {
     rmSync(work, { recursive: true, force: true })
   }
@@ -285,4 +288,31 @@ export function parseUnusedFiles(result) {
     }
   }
   return [...files].sort()
+}
+
+/**
+ * 从 knip 的 JSON 结果里取出没人用的导出：文件 → 导出名
+ * 只在从入口走得到的文件里报；nsExports（以命名空间导入、却没用到的成员）也算没人用
+ * @param {{issues?: {file: string, exports?: {name: string}[], nsExports?: {name: string}[]}[]}} result
+ * @returns {Map<string, Set<string>>}
+ */
+export function parseUnusedExports(result) {
+  if (!Array.isArray(result?.issues)) throw new Error('knip 的结果格式不认识：没有 issues 数组')
+  const map = new Map()
+  for (const issue of result.issues) {
+    for (const key of ['exports', 'nsExports']) {
+      const list = issue[key]
+      if (!Array.isArray(list) || list.length === 0) continue
+      if (typeof issue.file !== 'string' || issue.file === '' || issue.file.startsWith('/')) {
+        throw new Error(`knip 的结果里有不认识的文件路径：${issue.file}`)
+      }
+      const names = map.get(issue.file) ?? new Set()
+      for (const e of list) {
+        if (typeof e?.name !== 'string') throw new Error(`knip 的结果里有不认识的导出：${JSON.stringify(e)}`)
+        names.add(e.name)
+      }
+      map.set(issue.file, names)
+    }
+  }
+  return map
 }

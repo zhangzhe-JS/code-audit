@@ -7,7 +7,7 @@
 3. **删掉会不会出问题？** 在隔离的 worktree 里实际删掉，再和构建、测试的基线对比
 
 > 状态：**文件维度可用**（0.1.0）：scan → history → verify → report → quarantine 全流程跑通，在 Vue2 + JS、Vue3 + TS 两类项目上验证过。
-> 8 种状态都能判出并写明原因（`internal` 属于导出维度，以后做）；看不准的不判死。导出维度、接口维度往后放。进度见 `docs/progress.md`。
+> 8 种状态都能判出并写明原因（`internal` 属于导出维度，以后做）；看不准的不判死。**接口维度可用**（`api`、`api-report`），在 4 个项目上和人工核对的结果对比过。导出维度往后放。进度见 `docs/progress.md`。
 > 通用方案：项目差异只写在配置里，代码不针对任何具体项目。目前只支持 Vue（.vue 单文件组件、Vue 的全局组件约定）
 
 ---
@@ -297,6 +297,40 @@ node bin/code-audit.js quarantine --root ../my-app --profile profiles/my-app.js 
 - 任何一步出错都整体撤回，目标项目回到执行前的样子：已跟踪的文件回到 HEAD，新建的 README 删掉，原来就有的 README（包括没提交的）写回原内容
 - lint 配置不自动改，计划里列出要手动加的那一行
 
+### 接口维度
+
+回答「这个接口（方法 + 路径）前端还在不在用、什么时候不用的」。在 profile 里写 `api` 规则，说明请求是怎么发出去的：
+
+```js
+api: {
+  version: 1,                                         // 改了规则就加 1，结果里会记下
+  calls: [
+    { call: 'request({url, method})', defaultMethod: 'GET' },   // 照着代码写，参数换成占位
+    { call: 'http.*(url, ...)' },                               // * 处取方法：get、post……
+    { call: 'client(_)(url, ...).*()' },                        // 链式调用也行
+    { call: 'upload(url, ...)', method: 'POST' }
+  ],
+  attrs: [{ tag: 'el-upload', attr: 'action', method: 'POST' }], // 模板里写地址的属性
+  prefixes: ['/api'],                                           // 去掉的网关前缀
+  sdk: [{ method: 'POST', path: '/login', package: '@x/login', via: ['createAuth'] }], // SDK 内部发的请求
+  examples: [{ raw: '/x/list?page=1', expect: 'GET /x/list' }]  // 规则自带的测试，每次扫描先跑
+}
+```
+
+其余字段（`consts` 地址常量、`ignoreCalls`、`manual` 人工指明、`reviewedDynamic` 确认过的动态地址）见 `src/api/rules.js` 开头的说明。
+
+```bash
+node bin/code-audit.js api --root ../my-app --profile profiles/my-app.js --history --out reports/my-app/api.json
+node bin/code-audit.js api-report --in reports/a/api.json --in reports/b/api.json --out reports/api-report
+```
+
+- 接口标识 = 方法 + 路径模板：查询参数不区分，路径参数统一为 `{}`，开头的服务地址变量、规则里的前缀去掉
+- 在不在用：定义所在的文件从入口走得到，并且所在的顶层函数在用（导出被引用，或被同文件在用的代码调用）；文件走不到时照搬文件维度的状态（pending、unknown 等）
+- **覆盖报告**：像请求却没有规则命中的调用、地址由参数传入的封装函数、算不出地址的定义。按它补规则，直到清零。规则可以让模型读项目（请求封装、环境配置、几份 api 文件）后生成，人审核
+- `--history`：没人用的接口查主线上删掉调用的提交（删的文件当时 import 了定义所在的模块），合并提交补上分支上的提交；仍被走不到的文件引用的，查那个文件什么时候失去入口；都没有的记为从没被调用
+- `api-report` 的结论：在用 / C 保留（SDK）/ C 高风险（pending、unknown 等）/ B 需审核（证据不够硬、规则没补全）/ A 可删。`endpoints.csv` 带 BOM，Excel 直接打开，留了「后端处理意见」一列
+- 只看得到前端代码：A 可删也只是前端没人用，后端删之前要看网关日志，并且小批量删
+
 ---
 
 ## 开发
@@ -344,4 +378,6 @@ git status --short       # 确认列表里没有上面这些目录
 | M6 | 接入第二个项目（Vue3 + TS） |
 | M7 | quarantine、打包成 tgz（0.1.0） |
 | M8 | verify 提速：打包器证据（vite）、基线缓存 |
-| 以后 | 导出维度（含 internal）、接口维度、webpack 适配器、是否接入大模型分析 |
+| M9 | 接入另外两个项目（共 4 个） |
+| M10 | 接口维度：api（规则 + 覆盖报告）、--history、api-report（风险分级） |
+| 以后 | 导出维度（含 internal）、接口的菜单归属、查询服务 / MCP / CI、webpack 适配器 |

@@ -10,7 +10,9 @@ const commands = {
     history: { desc: '补充 git 历史：引入、失去引用', load: () => import('../src/commands/history.js') },
     verify: { desc: '在临时目录里实删候选，和构建 / 测试的基线比较', load: () => import('../src/commands/verify.js') },
     report: { desc: '从 JSON 生成报告', load: () => import('../src/commands/report.js') },
-    quarantine: { desc: '隔离：移进 _deprecated，加头注释（--apply 只改工作区，不提交）', load: () => import('../src/commands/quarantine.js') }
+    quarantine: { desc: '隔离：移进 _deprecated，加头注释（--apply 只改工作区，不提交）', load: () => import('../src/commands/quarantine.js') },
+    api: { desc: '接口维度：列出每个接口（方法 + 路径）在不在用，输出覆盖报告', load: () => import('../src/commands/api.js') },
+    'api-report': { desc: '合并多个项目的接口结果，给出 A 可删 / B 需审核 / C 保留或高风险，输出 Markdown 和 CSV', load: () => import('../src/commands/api-report.js') }
 }
 /**
  * padEnd(12) 用来把命令名补齐到 12 个字符宽，让说明那一列对齐。

@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { STATUSES, STATUS_LABELS } from './schema.js'
 import { BUNDLERS as BUNDLER_ADAPTERS } from '../verify/bundlers/index.js'
+import { validateApiConfig } from '../api/rules.js'
 
 /** 头注释支持的注释格式：block 是 JS 的 /** *\/，html 是 <!-- --> */
 export const COMMENT_STYLES = Object.freeze(['block', 'html'])
@@ -51,6 +52,7 @@ export const TABLE_COLUMNS = Object.freeze(['target', 'origin', 'status', 'intro
  * @property {VerifyConfig} verify    verify 用：在临时目录里跑的命令。没有默认值：各项目不同，猜错了就是乱跑
  * @property {BranchesConfig} branches scan 用：判断「其他分支在用」时查哪些没合并的分支
  * @property {QuarantineConfig} quarantine quarantine 用：隔离区放在哪
+ * @property {object|null} api  code-audit api 用：接口维度的规则（请求写法、前缀、SDK 接口等），见 src/api/rules.js。null = 没配置
  */
 
 /**
@@ -131,7 +133,9 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
   branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null }),
   // 隔离区：默认就近，放进文件所在目录下的 _deprecated
-  quarantine: Object.freeze({ layout: 'nearby', dirName: '_deprecated', dir: null, base: null })
+  quarantine: Object.freeze({ layout: 'nearby', dirName: '_deprecated', dir: null, base: null }),
+  // 接口维度的规则（code-audit api 用）：没有默认值，各项目的请求写法不同，见 src/api/rules.js
+  api: null
 })
 
 /**
@@ -283,6 +287,8 @@ export function resolveConfig(overrides = {}) {
     if (v !== null && (!isRelativeDir(v) || v.split('/').includes('..'))) errors.push(`quarantine.${k} 必须是相对仓库根目录的目录，如 "src/_deprecated"：${v}`)
   }
 
+  if (config.api !== null) errors.push(...validateApiConfig(config.api))
+
   if (errors.length > 0) throw new Error(`配置有误：\n- ${errors.join('\n- ')}`)
 
   return Object.freeze({
@@ -304,7 +310,8 @@ export function resolveConfig(overrides = {}) {
       bundlerConfig: Array.isArray(config.verify.bundlerConfig) ? Object.freeze([...config.verify.bundlerConfig]) : config.verify.bundlerConfig
     }),
     branches: Object.freeze({ ...config.branches, ignore: Object.freeze([...config.branches.ignore]) }),
-    quarantine: Object.freeze({ ...config.quarantine })
+    quarantine: Object.freeze({ ...config.quarantine }),
+    api: config.api === null ? null : deepFreeze(structuredClone(config.api))
   })
 }
 
@@ -317,6 +324,14 @@ export async function loadProfile(file) {
   const mod = await import(pathToFileURL(resolve(file)).href)
   if (mod.default === undefined) throw new Error(`配置文件没有 export default：${file}`)
   return resolveConfig(mod.default)
+}
+
+function deepFreeze(v) {
+  if (v && typeof v === 'object') {
+    for (const x of Object.values(v)) deepFreeze(x)
+    Object.freeze(v)
+  }
+  return v
 }
 
 /** 提交号显示长度是否合法：太短容易重复，超过 40 位没有意义 */
