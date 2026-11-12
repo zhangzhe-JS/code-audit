@@ -272,7 +272,8 @@ node bin/code-audit.js verify --root ../my-app --profile profiles/my-app.js [--k
 - 只看得到经过套好的配置的构建：构建命令用 JS API 传内联配置、或用了没写进 `bundlerConfig` 的配置文件，拿不到列表（会提示）
 - Vite 给 Web Worker 单独打的包不经过主配置的插件，worker 里加载的文件不在列表里；webpack 的子编译（html-webpack-plugin 的模板等）同样不记
 - webpack 只有生产模式（或开了 optimization.usedExports）才算导出用没用到，开发模式构建只有模块列表
-- lint 规则、tsconfig 按文件名 `vite.config.ts` 配置的项目，改名后的原配置可能不过检查，会走「撤掉重跑」，这次就没有证据
+- 套的那一层只有几行、不带注释（记录逻辑在 `src/verify/bundlers/preload.cjs`，基线构建时按环境变量 `CODE_AUDIT_PRELOAD` require 进来），写完再用项目自己的 eslint `--fix` 一遍，构建前跑 lint、类型检查的项目一般也过得去
+- lint 规则、tsconfig 按文件名 `vite.config.ts` 配置的项目，改名后的原配置可能不过检查；构建脚本把环境变量整个清空的拿不到记录。这两种都照常验证，只是没有证据
 - 只在有要删的文件（`dead`、`dead-only-ref`）时才跑；只有 `test-only` 这类时不会专门为它跑构建
 - 缓存键不含环境变量；构建受环境变量影响时加 `--fresh`
 - 目前只有 Vite 适配器；加别的打包器照 `src/verify/bundlers/index.js` 里写的约定写一个适配器，登记进去就行，配置校验自动认

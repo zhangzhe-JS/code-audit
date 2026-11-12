@@ -5,12 +5,19 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { collectModules, instrument } from '../src/verify/bundlers/index.js'
+import { collectModules, instrument as realInstrument } from '../src/verify/bundlers/index.js'
+import { bundlerEnv } from '../src/verify/bundlers/wrap.js'
 import { isEsm } from '../src/verify/bundlers/webpack.js'
 import { ORIGINAL_MARK } from '../src/verify/bundlers/vite.js'
 import { resolveConfig } from '../src/core/config.js'
 
 const require = createRequire(import.meta.url)
+
+// 测试进程里直接加载包装配置：记录目录照基线构建的方式放进环境变量
+const instrument = (o) => {
+  Object.assign(process.env, bundlerEnv(o.outDir))
+  return realInstrument(o)
+}
 
 function tempDir(t) {
   const dir = mkdtempSync(join(tmpdir(), 'code-audit-webpack-'))

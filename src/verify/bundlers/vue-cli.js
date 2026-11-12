@@ -8,41 +8,16 @@
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { moduleSource, pluginSource, wrapConfigFile } from './webpack.js'
+import { wrapConfigFile } from './wrap.js'
 
 export const CONFIG_FILES = Object.freeze(['vue.config.js', 'vue.config.cjs', 'vue.config.mjs'])
 
-export function instrument({ dir, outDir, config = null }) {
+export function instrument({ dir, config = null }) {
   return wrapConfigFile({
     dir,
     config,
     found: CONFIG_FILES.find((f) => existsSync(join(dir, f))),
     missing: `没有找到 Vue CLI 配置文件（${CONFIG_FILES.join('、')}）。写在 package.json 的 "vue" 字段里的套不上；配置文件在别处的话，在 verify.bundlerConfig 里写上`,
-    source: (originalSpec, esm) => wrapper(originalSpec, outDir, esm)
+    kind: 'vueCli'
   })
-}
-
-export function wrapper(originalSpec, outDir, esm) {
-  const body = `${pluginSource(outDir)}
-function withModules(options) {
-  if (!options || typeof options !== 'object') return options
-  const chain = options.chainWebpack
-  return {
-    ...options,
-    chainWebpack(config) {
-      const r = typeof chain === 'function' ? chain.call(this, config) : undefined
-      config.plugin('code-audit-modules').use(CodeAuditModules)
-      return r
-    }
-  }
-}
-function wrap(original) {
-  if (typeof original === 'function') {
-    return function (...args) {
-      return wrap(original.apply(this, args))
-    }
-  }
-  return original && typeof original.then === 'function' ? original.then(wrap) : withModules(original)
-}`
-  return moduleSource(originalSpec, body, esm)
 }

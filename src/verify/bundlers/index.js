@@ -10,7 +10,8 @@
  * 适配器约定（加新的打包器照这个写，再登记到 BUNDLERS）：
  *   instrument({ dir, outDir, config }) → { config, restore }
  *     dir：临时目录；config：配置文件（相对 dir），null 时按打包器自己的规则找；找不到就抛错
- *     只改临时目录里的文件；restore() 把改过的放回原样
+ *     只改临时目录里的文件；restore() 把改过的放回原样。一般用 wrap.js 的 wrapConfigFile 写包装配置，
+ *     记录逻辑写进 preload.cjs（基线构建时环境变量 CODE_AUDIT_PRELOAD 指着它，包装配置 require 进来；记录目录在 CODE_AUDIT_BUNDLER_OUT 里）
  *   构建时每次构建往 outDir 写一个 JSON 文件：{ ids: 加载过的模块 id（绝对路径，可以带 ?查询参数，虚拟模块以 \0 开头），
  *   exports?: { 模块 id: { rendered: 保留的导出, removed: 摇掉的导出 } } }；只写 id 数组的老格式也认
  *   collectModules 统一读取、换成相对路径
@@ -18,6 +19,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import * as vite from './vite.js'
+import { bundlerEnv } from './wrap.js'
 import * as webpack from './webpack.js'
 import * as vueCli from './vue-cli.js'
 
@@ -45,7 +47,7 @@ export function instrument({ type, dir, outDir, config = null }) {
  * @param {string} opts.dir
  * @param {string} opts.outDir
  * @param {string[]|null} opts.configs null = 按打包器自己的规则找一个
- * @returns {{configs: string[], restore: () => void}}
+ * @returns {{configs: string[], restore: () => void, env: Record<string, string>}} env：基线构建要带上的环境变量（记录逻辑在哪、记录写到哪）
  */
 export function instrumentAll({ type, dir, outDir, configs }) {
   const done = []
@@ -55,7 +57,7 @@ export function instrumentAll({ type, dir, outDir, configs }) {
     for (const d of done.reverse()) d.restore()
     throw e
   }
-  return { configs: done.map((d) => d.config), restore: () => done.slice().reverse().forEach((d) => d.restore()) }
+  return { configs: done.map((d) => d.config), restore: () => done.slice().reverse().forEach((d) => d.restore()), env: bundlerEnv(outDir) }
 }
 
 /**

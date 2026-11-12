@@ -7,6 +7,7 @@ import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runCommand } from './run-command.js'
 import { collectModules, instrumentAll, workDirsOf } from './bundlers/index.js'
+import { WRAPPER_VERSION } from './bundlers/wrap.js'
 import { age, baselineKey, depsFingerprint, readBaseline, writeBaseline } from './cache.js'
 
 /** 按这个顺序跑 */
@@ -21,7 +22,7 @@ export const STEPS = Object.freeze(['build', 'test'])
  * @param {typeof runCommand} [opts.run] 测试时可以替换
  * @returns {Promise<Record<string, import('./run-command.js').CommandResult>>} 只含配置了的步骤
  */
-export async function runSteps({ cwd, verify, logDir, log = () => {}, run = runCommand }) {
+export async function runSteps({ cwd, verify, logDir, log = () => {}, run = runCommand, env = undefined }) {
   const results = {}
   for (const step of STEPS) {
     const command = verify[step]
@@ -29,7 +30,7 @@ export async function runSteps({ cwd, verify, logDir, log = () => {}, run = runC
     log(`运行 ${step}：${command}`)
     const logFile = logDir ? join(logDir, `${step}.log`) : undefined
     if (logDir) mkdirSync(logDir, { recursive: true })
-    const r = await run(command, { cwd, timeoutSeconds: verify.timeoutSeconds, logFile })
+    const r = await run(command, { cwd, timeoutSeconds: verify.timeoutSeconds, logFile, ...(env ? { env } : {}) })
     results[step] = r
     // 替换掉的 run（测试用）可能不写日志：至少把保留下来的输出写进去
     if (logFile && !existsSync(logFile)) writeFileSync(logFile, r.output)
@@ -76,12 +77,14 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
   const outDir = join(dirname(ws.dir), 'bundler-modules')
   let restore = null
   let configs = []
+  let env
   let bundlerDropped = null
   if (verify.bundler) {
     try {
       const r = instrumentAll({ type: verify.bundler, dir: ws.dir, outDir, configs: verify.bundlerConfig === null ? null : [].concat(verify.bundlerConfig) })
       restore = r.restore
       configs = r.configs
+      env = r.env
       log(`打包器证据：在临时目录里给 ${configs.join('、')} 套了一层，构建时记下加载过的模块（项目文件不改）`)
     } catch (e) {
       bundlerDropped = `没能套上打包器配置：${e.message}`
@@ -95,6 +98,11 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
     // 老版本存的缓存没有导出记录：拿到了模块列表却没有 exports 的，当没有缓存，重跑一遍（只有这一次）
     if (hit && hit.modules && hit.exports === undefined) {
       log('有基线缓存，但是老格式（没有 tree-shaking 的导出记录），重跑一遍')
+      hit = null
+    }
+    // 上次套了配置构建不过、撤掉了，用的是老写法的包装配置：换了写法，重试一次
+    if (hit && hit.bundlerDropped && restore && hit.wrapper !== WRAPPER_VERSION) {
+      log(`有基线缓存，但上次${hit.bundlerDropped}，当时是老写法的包装配置：重跑一遍`)
       hit = null
     }
     if (hit) {
@@ -116,7 +124,7 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
     }
   }
 
-  let results = await runSteps({ cwd: ws.dir, verify, run, logDir, log })
+  let results = await runSteps({ cwd: ws.dir, verify, run, logDir, log, env })
   let modules = null
   let exports = null
   let builds = 0
@@ -145,7 +153,7 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
   }
   if (!results.build || results.build.ok) {
     const savedExports = exports ? Object.fromEntries([...exports].sort().map(([f, e]) => [f, { rendered: [...e.rendered].sort(), removed: [...e.removed].sort() }])) : null
-    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, exports: savedExports, builds, bundlerDropped }, cacheDir), log)
+    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, exports: savedExports, builds, bundlerDropped, wrapper: WRAPPER_VERSION }, cacheDir), log)
   }
   return { results, modules, exports, builds, cachedAt: null, bundlerDropped }
 }

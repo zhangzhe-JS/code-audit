@@ -3,7 +3,7 @@
 每完成一步就更新这份文档：勾掉已完成的条目，写上提交号和测试数量。
 
 - 最后更新：2026-11-12
-- 测试：542 个，全部通过（`npm test`）
+- 测试：545 个，全部通过（`npm test`）
 
 ---
 
@@ -467,8 +467,7 @@ knip 适合做**采集**，状态判定仍由我们的规则层做（M4）。kni
 - **发现并修复**：`<router-view v-slot="{ Component }">` 里的 `:is="Component"` 被当成「组件名是变量」，项目 D 的 5 个全局组件被判 unknown。
   Component 是路由给的组件对象，不会按名字找全局组件：插槽里解构出的 Component（含改名）在这对标签里用作 :is 时不算盲区（`global-components.js` 的 `routerViewSlots`）。
   反向检查：去掉后测试失败。修复后其中 2 个组件判 dead，模板标签 grep 核对没人用
-- **已知问题**：项目 D 的 eslint 开了 `eslint-comments/no-unlimited-disable`，打包器证据给 vite 配置套的那层（开头 `/* eslint-disable */`）过不了构建前的 lint，
-  按设计撤掉重跑、照常验证，这次没有打包器证据。以后可以改成不带注释的包装（把插件放进 node_modules 下的辅助文件）
+- ~~已知问题~~（已修，见「打包器包装配置不带注释」）：项目 D 的 eslint 开了 `eslint-comments/no-unlimited-disable`，打包器证据给 vite 配置套的那层（开头 `/* eslint-disable */`）过不了构建前的 lint
 
 ## M10 接口维度 ✅
 
@@ -971,3 +970,23 @@ stdio 传输、每行一条 JSON-RPC 2.0，不依赖 SDK；initialize、tools/li
 对不上的（一个文件里同时改了好几个、搬到了别的文件、旧接口别处还在用）照旧显示成「不再定义」加「新增」，不猜。
 
 真实项目（项目 A，最近 60 个提交）：报出 2 条地址变更（同一函数），对照 git diff 都属实；其中一条旧地址被新函数接着用，正是审查第 6 条的情况，修复前会漏报。改名配对这 60 个提交里没有触发，也没有误配。
+
+## 打包器包装配置不带注释 ✅
+
+项目 D 构建前跑两道 eslint（`eslint .` 门禁、vite-plugin-eslint 查 `*.config.{js,ts}`），用的 antfu 配置不许整文件 `/* eslint-disable */`、不许 `import *`、
+不许按路径引 node_modules、不许 `@ts-nocheck`，原来的包装配置过不去，撤掉重跑后没有打包器证据。
+
+- 记录逻辑挪进固定的 `src/verify/bundlers/preload.cjs`（vite、webpack、vue-cli 共用，写成真代码，不再拼字符串）
+- 包装配置（`wrap.js`）只有几行：import 原配置 → 环境变量 `CODE_AUDIT_PRELOAD` 指着记录逻辑就 require 进来套上，没有就原样返回。
+  不带注释、不按路径引辅助文件、不用顶层 await、不直接写 `process`（有的规则要求 import，有的要求用全局）；`.ts` 原配置不写扩展名（类型检查不认带 `.ts` 的导入）
+- 写完用项目自己的 eslint `--fix` 一遍（从配置所在目录往上找 `node_modules/.bin/eslint`，不出临时目录；没有、出错都不管）
+- 不用 `NODE_OPTIONS` 预加载：项目 D 的构建脚本把 `NODE_OPTIONS` 整个改写成 `--max-old-space-size=8192`，普通环境变量会原样传下去
+- 删文件的各轮不带这个环境变量：包装配置原样返回原配置，构建和不套时一样
+- 基线缓存记下包装配置的写法版本：以前用老写法套不上、撤掉了的，重跑一次
+
+真实项目：项目 D 第一次拿到打包器证据（构建 19 秒，记录 145 个文件的导出）；项目 B、C 照常（180、130 个文件）。
+项目 D 有 1 个导出因此从 dead 改判 unknown：`ProxyMessage` 在自动导入里改了名（`const ElMessage: typeof import(...)['ProxyMessage']`），按名字找不到用法，构建证据救了回来。
+反向检查：撤掉 eslint --fix、保留原有写法的几处逻辑、带上环境变量、老写法缓存重试、`__esModule`、webpack 数组配置，各有测试失败；
+「不出临时目录」那一句被前面的判断覆盖，是兜底，单独撤掉不影响结果。
+
+仍有的限制：构建脚本把环境变量整个清空（只传自己列的几个）时拿不到记录，会提示「构建没经过套好的配置」，照常验证。

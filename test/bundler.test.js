@@ -6,8 +6,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createRepo } from './helpers/repo.js'
-import { instrument as instrumentVite, ORIGINAL_MARK } from '../src/verify/bundlers/vite.js'
-import { collectModules, instrument, instrumentAll, toRepoFile, workDirsOf } from '../src/verify/bundlers/index.js'
+import { instrument as viteInstrument, ORIGINAL_MARK } from '../src/verify/bundlers/vite.js'
+import { collectModules, instrument as realInstrument, instrumentAll, toRepoFile, workDirsOf } from '../src/verify/bundlers/index.js'
+import { bundlerEnv, lintFix, PRELOAD, wrapperSource } from '../src/verify/bundlers/wrap.js'
+
+// 测试进程里直接 import 包装配置：记录目录照基线构建的方式放进环境变量
+const instrument = (o) => {
+  Object.assign(process.env, bundlerEnv(o.outDir))
+  return realInstrument(o)
+}
+const instrumentVite = (o) => {
+  Object.assign(process.env, bundlerEnv(o.outDir))
+  return viteInstrument(o)
+}
 import { age, baselineKey, cacheDir, depsFingerprint, readBaseline, writeBaseline } from '../src/verify/cache.js'
 import { verifyReport } from '../src/verify/index.js'
 import { runCommand } from '../src/verify/run-command.js'
@@ -103,7 +114,7 @@ test('vite 适配器：按 Vite 的顺序找配置文件；找不到、指定的
   const empty = join(dir, 'empty')
   mkdirSync(empty)
   assert.throws(() => instrumentVite({ dir: empty, outDir: join(dir, 'o') }), /没有找到 vite 配置文件.*verify\.bundlerConfig/)
-  assert.throws(() => instrumentVite({ dir: empty, outDir: join(dir, 'o'), config: 'web/vite.config.js' }), /指定的 vite 配置文件不在提交里/)
+  assert.throws(() => instrumentVite({ dir: empty, outDir: join(dir, 'o'), config: 'web/vite.config.js' }), /指定的配置文件不在提交里：web\/vite\.config\.js/)
   assert.throws(() => instrument({ type: 'rollup', dir, outDir: join(dir, 'o') }), /不支持的打包器：rollup（支持：vite、webpack、vue-cli）/)
 })
 
@@ -303,15 +314,68 @@ test('verifyReport：基线构建失败时不写缓存', async (t) => {
   assert.deepEqual(existsSync(cache) ? readdirSync(cache) : [], [])
 })
 
-test('vite 适配器：生成的配置开头关掉 eslint 和 TS 检查（构建前会 lint、类型检查的项目）；restore 放回原配置', (t) => {
+test('包装配置：只有几行、不带任何注释、不 import 辅助文件（构建前的 lint、类型检查过得去）；.ts 不写扩展名；restore 放回原配置', (t) => {
   const dir = tempDir(t)
   writeFileSync(join(dir, 'vite.config.ts'), 'export default {}\n')
   const r = instrumentVite({ dir, outDir: join(dir, 'o') })
-  const code = readFileSync(join(dir, 'vite.config.ts'), 'utf8')
-  assert.match(code, /^\/\* eslint-disable \*\/\n\/\/ @ts-nocheck\n/)
+  assert.equal(readFileSync(join(dir, 'vite.config.ts'), 'utf8'), [
+    "import { createRequire } from 'node:module'",
+    "import config from './vite.config.code-audit-original'",
+    '',
+    "export * from './vite.config.code-audit-original'",
+    '',
+    "const preload = Reflect.get(globalThis, 'process').env.CODE_AUDIT_PRELOAD",
+    'const bundler = preload ? createRequire(preload)(preload) : undefined',
+    '',
+    'export default bundler ? bundler.vite(config) : config',
+    ''
+  ].join('\n'))
   r.restore()
   assert.equal(readFileSync(join(dir, 'vite.config.ts'), 'utf8'), 'export default {}\n')
   assert.equal(existsSync(join(dir, `vite.config${ORIGINAL_MARK}.ts`)), false)
+  assert.equal(wrapperSource('./webpack.config.code-audit-original.js', 'webpack', false), "const config = require('./webpack.config.code-audit-original.js')\n\nconst preload = Reflect.get(globalThis, 'process').env.CODE_AUDIT_PRELOAD\nconst bundler = preload ? require(preload) : undefined\n\nmodule.exports = bundler ? bundler.webpack(config) : config\n")
+  assert.match(wrapperSource("./it's.js", 'vite', true), /from "\.\/it's\.js"/)
+})
+
+test('包装配置：没有 CODE_AUDIT_PRELOAD 时原样返回原配置（删文件的各轮、开发模式）；构建脚本改写了 NODE_OPTIONS 也不影响', async (t) => {
+  const dir = tempDir(t)
+  writeFileSync(join(dir, 'vite.config.mjs'), 'export default { plugins: [] }\n')
+  instrumentVite({ dir, outDir: join(dir, 'o') })
+  delete process.env.CODE_AUDIT_PRELOAD
+  const mod = await import(pathToFileURL(join(dir, 'vite.config.mjs')).href)
+  assert.deepEqual(mod.default, { plugins: [] })
+  assert.deepEqual(bundlerEnv('/o'), { CODE_AUDIT_PRELOAD: PRELOAD, CODE_AUDIT_BUNDLER_OUT: '/o' })
+  // 子进程：构建脚本把 NODE_OPTIONS 整个改写了，包装配置照样按环境变量拿到记录逻辑
+  writeFileSync(join(dir, 'run.mjs'), "const m = await import('./vite.config.mjs')\nconsole.log(m.default.plugins.map((p) => p.name).join(','))\n")
+  const r = await runCommand('node run.mjs', { cwd: dir, timeoutSeconds: 30, env: { ...bundlerEnv(join(dir, 'o')), NODE_OPTIONS: '--max-old-space-size=4096' } })
+  assert.match(r.output, /code-audit:modules/)
+})
+
+test('套配置时用项目自己的 eslint --fix 一遍包装配置（风格跟项目一致）', { skip: process.platform === 'win32' }, (t) => {
+  const dir = tempDir(t)
+  mkdirSync(join(dir, 'node_modules/.bin'), { recursive: true })
+  // 假的 eslint：把单引号换成双引号、行尾加分号（模仿 --fix 按项目风格改）
+  writeFileSync(join(dir, 'node_modules/.bin/eslint'), `#!/usr/bin/env node\nconst fs = require('fs')\nconst f = process.argv[3]\nfs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace(/'/g, '"').replace(/\\)\\n/g, ');\\n'))\n`, { mode: 0o755 })
+  writeFileSync(join(dir, 'vite.config.mjs'), 'export default {}\n')
+  instrumentVite({ dir, outDir: join(dir, 'o') })
+  const code = readFileSync(join(dir, 'vite.config.mjs'), 'utf8')
+  assert.match(code, /import \{ createRequire \} from "node:module"/)
+  assert.match(code, /Reflect\.get\(globalThis, "process"\)\.env\.CODE_AUDIT_PRELOAD/)
+})
+
+test('lintFix：从配置文件所在目录往上找项目的 eslint，--fix 包装配置；不出临时目录，没有就不跑，出错不管', (t) => {
+  const dir = tempDir(t)
+  mkdirSync(join(dir, 'node_modules/.bin'), { recursive: true })
+  writeFileSync(join(dir, 'node_modules/.bin/eslint'), '')
+  mkdirSync(join(dir, 'web'))
+  const calls = []
+  const bin = lintFix(dir, join(dir, 'web/vite.config.ts'), (cmd, args, opts) => calls.push({ cmd, args, cwd: opts.cwd }))
+  assert.equal(bin, join(dir, 'node_modules/.bin/eslint'))
+  assert.deepEqual(calls, [{ cmd: bin, args: ['--fix', 'web/vite.config.ts'], cwd: dir }])
+  const inner = join(dir, 'inner')
+  mkdirSync(inner)
+  assert.equal(lintFix(inner, join(inner, 'vite.config.ts'), () => assert.fail('临时目录外的 eslint 不用')), null)
+  assert.equal(lintFix(dir, join(dir, 'vite.config.ts'), () => { throw new Error('boom') }), join(dir, 'node_modules/.bin/eslint'))
 })
 
 test('verifyReport + 打包器证据：套了配置后构建失败时撤掉重跑，照常验证；复用缓存时也撤掉', async (t) => {
@@ -334,6 +398,17 @@ test('verifyReport + 打包器证据：套了配置后构建失败时撤掉重�
   const again = await verifyReport({ data: dataFor(repo), root: repo.root, config, log: () => {}, cacheDir: cache })
   assert.ok(again.summary.baselineCachedAt)
   assert.equal(again.data.items.find((i) => i.target === 'src/dead.js').verify.passed, true)
+
+  // 缓存是老写法的包装配置撤掉的：换了写法，重跑一遍（不沿用「撤掉」）
+  for (const name of readdirSync(cache).filter((n) => n.endsWith('.json'))) {
+    const rec = JSON.parse(readFileSync(join(cache, name), 'utf8'))
+    delete rec.wrapper
+    writeFileSync(join(cache, name), JSON.stringify(rec))
+  }
+  const retryLogs = []
+  const retry = await verifyReport({ data: dataFor(repo), root: repo.root, config, log: (m) => retryLogs.push(m), cacheDir: cache })
+  assert.equal(retry.summary.baselineCachedAt, null)
+  assert.ok(retryLogs.some((l) => /老写法的包装配置：重跑一遍/.test(l)))
 })
 
 test('vite 适配器：项目里本来就有同名的改名文件时换个名字，不覆盖；restore 后两个文件都在', async (t) => {
