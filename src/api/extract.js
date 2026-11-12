@@ -89,6 +89,8 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
     const consts = topLevelConsts(program)
     walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys: parser.visitorKeys })
     markStoreActions(program, result, parser.visitorKeys)
+    collectActionImports(program, result, parser.visitorKeys)
+    collectDynamicMembers(program, result, parser.visitorKeys)
     result.piniaUses = storeUses(program, parser.visitorKeys, isReference, isSfc ? markupOf(content)?.[1] ?? null : null)
     for (const c of addressConsts) {
       if (c.from && c.from !== path) continue
@@ -262,6 +264,7 @@ export function loadCallees(expr) {
       return
     }
     if (n.type === 'CallExpression' || n.type === 'NewExpression') out.push(calleeName(n.callee))
+    else if (n.type === 'AssignmentExpression' || n.type === 'UpdateExpression' || (n.type === 'UnaryExpression' && n.operator === 'delete')) out.push('<mutation>')
     else if (n.type === 'TaggedTemplateExpression') out.push(calleeName(n.tag))
     else if (n.type === 'AwaitExpression' || n.type === 'ImportExpression') out.push(`<${n.type === 'AwaitExpression' ? 'await' : 'import'}>`)
     for (const [k, child] of Object.entries(n)) {
@@ -540,6 +543,89 @@ function markStoreActions(program, result, keys) {
     if (own.length > 0) continue // Pinia 的 actions 不按 Vuex 认
     const va = result.storeActions.find((a) => typeof a.start === 'number' && site.start >= a.start && site.start < a.end)
     if (va) site.vuexAction = va.name
+  }
+}
+
+// Keep individual reference sites: a normal use outside an action prevents an
+// imported API function from being classified as unused merely because a store is idle.
+function collectActionImports(program, result, keys) {
+  result.actionImports = new Map()
+  const locals = new Set(result.imports.flatMap(i => i.specifiers.map(s => s.local)))
+  const stores = piniaStores(program, keys)
+  const visit = (n, parent, key) => {
+    if (!n || typeof n.type !== 'string') return
+    if (n.type === 'ImportDeclaration') return
+    if (n.type === 'Identifier' && locals.has(n.name) && isReference(n, parent, key)) {
+      let site = null
+      for (const store of stores) {
+        const unit = store.units.find(u => n.start >= u.start && n.end <= u.end)
+        if (unit?.actions) site = { store: store.binding, storeActions: unit.actions }
+      }
+      const list = result.actionImports.get(n.name) ?? []
+      list.push(site)
+      result.actionImports.set(n.name, list)
+    }
+    for (const k of keys[n.type] ?? []) {
+      const c = n[k]
+      if (Array.isArray(c)) c.forEach(x => visit(x, n, k))
+      else if (c && typeof c === 'object') visit(c, n, k)
+    }
+  }
+  visit(program, null, null)
+}
+
+/** Static import().then and await import bindings, represented as synthetic imports.
+ * Unique locals avoid collisions between callback scopes. Unknown namespace uses
+ * retain all exports instead of guessing which member they access.
+ */
+function collectDynamicMembers(program, result, keys) {
+  const walk = (n, fn, parent = null, key = null) => {
+    if (!n || typeof n.type !== 'string') return
+    if (fn(n, parent, key) === false) return
+    for (const k of keys[n.type] ?? []) {
+      const c = n[k]
+      if (Array.isArray(c)) c.forEach(x => walk(x, fn, n, k))
+      else if (c && typeof c === 'object') walk(c, fn, n, k)
+    }
+  }
+  for (const top of program.body) {
+    const owners = ownersOf(top).filter(o => o !== MODULE)
+    const by = owners.length ? owners : [MODULE]
+    const record = (source, pattern, scope, pos) => {
+      if (!source || !pattern) return
+      const local = `<dynamic:${pos}>`
+      const specs = []
+      if (pattern.type === 'Identifier') {
+        specs.push({ imported: '*', local })
+        walk(scope, (n, parent, key) => {
+          if (n.type !== 'Identifier' || n.name !== pattern.name || !isReference(n, parent, key)) return
+          if (n === pattern) return
+          for (const o of by) {
+            addUse(result, local, o)
+            if (parent?.type === 'MemberExpression' && key === 'object' && !parent.computed) addUse(result, `${local}.${parent.property.name}`, o)
+            else addUse(result, local, o, 'importWhole')
+          }
+        })
+      } else if (pattern.type === 'ObjectPattern') {
+        for (const pr of pattern.properties) {
+          const imported = pr.type === 'Property' && !pr.computed ? moduleName(pr.key) : '*'
+          const alias = `${local}:${specs.length}`
+          specs.push({ imported: imported ?? '*', local: alias })
+          for (const o of by) {
+            addUse(result, alias, o)
+            if (imported === '*') addUse(result, alias, o, 'importWhole')
+          }
+        }
+      }
+      if (specs.length) result.imports.push({ source, specifiers: specs, dynamic: true })
+    }
+    walk(top, n => {
+      if (n.type === 'VariableDeclarator' && n.init?.type === 'AwaitExpression' && n.init.argument.type === 'ImportExpression') record(stringValue(n.init.argument.source), n.id, top, n.start)
+      if (n.type === 'CallExpression' && n.callee.type === 'MemberExpression' && !n.callee.computed && n.callee.property.name === 'then' && n.callee.object.type === 'ImportExpression') {
+        const cb = n.arguments[0]
+        if (cb && FUNCTIONS.has(cb.type)) record(stringValue(n.callee.object.source), cb.params[0], cb.body, n.start)
+      }
+    })
   }
 }
 

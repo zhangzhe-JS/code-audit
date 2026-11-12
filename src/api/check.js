@@ -26,6 +26,12 @@ const LIVE = 'live'
 export function compareApi({ before, after, others = [], changed = null }) {
   const findings = []
   const add = (level, kind, key, detail) => findings.push({ level, kind, key, detail })
+  // 解析失败会让接口清单不完整；任何一侧存在时都不能把“消失”解释成安全变更。
+  for (const side of [{ name: '基线', result: before }, { name: '当前提交', result: after }]) {
+    for (const error of side.result.coverage?.parseErrors ?? []) {
+      add('risk', 'coverage-parseErrors', `${side.name}:${error.from ?? 'unknown'}`, `${side.name} ${error.from ?? '未知文件'}解析失败：${error.message ?? '未知错误'}；接口变化结果不完整，不能据此删除接口`)
+    }
+  }
   const b = new Map(before.endpoints.map((e) => [e.key, e]))
   const a = new Map(after.endpoints.map((e) => [e.key, e]))
   const usedElsewhere = (key) => others.filter((o) => o.project.name !== after.project.name && o.endpoints.some((e) => e.key === key && e.status === LIVE)).map((o) => o.project.name)

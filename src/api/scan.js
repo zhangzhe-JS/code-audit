@@ -118,6 +118,27 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   const deadCallers = findCallers({ parsed, unreachable, aliases: config.aliases, onlyUnreachable: true })
   // 请求写在 store 的 action 里：store 在用、这个 action 没人调用的，定义判没人用
   const actionState = createActionChecker({ parsed, unreachable, callers, aliases: config.aliases, autoNames })
+  const byPath = new Map(parsed.map(p => [p.path, p]))
+  const inactiveActionOnly = (p, owners) => {
+    if (owners.some(o => o === MODULE || o === TEMPLATE) || autoUsed.has(`${p.path}#*`)) return false
+    // Incomplete parsing or indirect local consumers invalidate this proof.
+    if (parsed.some(x => x.errors.length > 0)) return false
+    return owners.length > 0 && owners.every(owner => {
+      const binding = p.bindings.get(owner)
+      if (!binding || [...binding.exported].some(e => autoUsed.has(`${p.path}#${e}`))) return false
+      if ([...p.bindings].some(([n, b]) => n !== owner && b.refs.has(owner))) return false
+      const uses = callers.get(`${p.path}#${owner}`) ?? []
+      if (uses.length === 0) return false
+      return uses.every(c => {
+        const from = byPath.get(c.from)
+        if (!from || !c.locals?.length) return false
+        return c.locals.every(local => {
+          const sites = from.actionImports?.get(local)
+          return sites?.length > 0 && sites.every(site => site && actionState(from, site)?.status === 'dead')
+        })
+      })
+    })
+  }
 
   // 4. 定义 → 接口
   const wrapperNames = new Set(calls.map((c) => c.steps[0].name))
@@ -148,6 +169,7 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
       const fn = fnName(s.owners)
       let state = defState(p.path, s.owners, fileState, usedNames.get(p.path))
       if (state.status === 'live' && !fileState) state = actionState(p, s) ?? state
+      if (state.status === 'live' && !fileState && inactiveActionOnly(p, s.owners)) state = { status: 'dead', reason: '所有已识别的引用均位于未被调用的 Pinia action；没有普通调用、同文件调用或自动导入用法' }
       let method = s.method
       let path = s.path
       let rule = s.rule
@@ -472,4 +494,3 @@ function findSdkRefs({ parsed, usedNames, sdk }) {
   }
   return out
 }
-

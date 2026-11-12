@@ -122,7 +122,12 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
     if (!names || names.size === 0) continue
     const used = usedBindings(p, names)
     // 初始化时执行了可能有副作用的调用的声明（export const x = register(...)）：删掉会丢掉副作用，连同它引用的都要留着
-    const effects = new Map([...(p.initCalls ?? [])].map(([n, calls]) => [n, calls.filter((c) => !isPureCall(c))]).filter(([, c]) => c.length > 0))
+    const effects = new Map([...(p.initCalls ?? [])].map(([n, calls]) => [n, calls.filter((c) => {
+      const root = c.split('.')[0]
+      const imported = p.imports.find(i => i.specifiers.some(s => s.local === root))
+      const framework = imported && ['vue', 'pinia', 'react'].includes(imported.source)
+      return !isPureCall(c) || p.bindings.has(root) || (imported && !framework)
+    })]).filter(([, c]) => c.length > 0))
     const kept = closure(p, [...used, ...effects.keys()])
     for (const name of [...names].sort()) {
       if (autoUsed.has(`${p.path}#${name}`) || autoUsed.has(`${p.path}#*`)) continue
@@ -286,7 +291,10 @@ const PURE_METHODS = new Set(['map', 'filter', 'reduce', 'concat', 'slice', 'joi
 export function isPureCall(name) {
   if (PURE_CALLS.has(name) || name.startsWith('Math.')) return true
   const dot = name.lastIndexOf('.')
-  return dot > 0 && PURE_METHODS.has(name.slice(dot + 1)) && !name.startsWith('Object.') && !name.startsWith('Reflect.')
+  // 只有明确属于标准值方法的调用才能放行；`service.map()`、`custom.toString()` 等
+  // 可能有注册、网络或全局写入副作用，不能按方法名猜成纯函数。
+  const receiver = dot > 0 ? name.slice(0, dot) : ''
+  return dot > 0 && PURE_METHODS.has(name.slice(dot + 1)) && /^(Array|String|Number|Object|JSON|Math|Date|RegExp|URL|URLSearchParams)(\.|$)/.test(receiver)
 }
 
 /** 从这些名字出发，同文件里引用到的名字都算上 */
