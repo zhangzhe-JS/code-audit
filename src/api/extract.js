@@ -84,6 +84,12 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
 
   if (program) {
+    // Only a literal default module can prove its namespace configuration.
+    const moduleExport = program.body.find(n => n.type === 'ExportDefaultDeclaration')?.declaration
+    result.vuexNamespaced = moduleExport?.type === 'ObjectExpression' &&
+      !moduleExport.properties.some(p => p.type !== 'Property' || p.computed) &&
+      moduleExport.properties.filter(p => moduleName(p.key) === 'namespaced').length === 1 &&
+      moduleExport.properties.find(p => moduleName(p.key) === 'namespaced')?.value.value === true
     collectTopLevel(program, result, lineOf)
     collectStoreActions(program, result, parser.visitorKeys)
     const consts = topLevelConsts(program)
@@ -560,6 +566,10 @@ function collectActionImports(program, result, keys) {
       for (const store of stores) {
         const unit = store.units.find(u => n.start >= u.start && n.end <= u.end)
         if (unit?.actions) site = { store: store.binding, storeActions: unit.actions }
+      }
+      if (stores.length === 0 && result.vuexNamespaced) {
+        const action = result.storeActions.find(a => n.start >= a.start && n.end <= a.end)
+        if (action) site = { vuexAction: action.name }
       }
       const list = result.actionImports.get(n.name) ?? []
       list.push(site)

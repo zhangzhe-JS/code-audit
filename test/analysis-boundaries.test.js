@@ -71,3 +71,35 @@ export const useUser = defineStore('u', { actions: {
   repo.commit('direct caller')
   assert.equal(scanApi({ root: repo.root, project: 'p', config }).endpoints.find(e => e.path === '/login').status, 'live')
 }))
+
+test('Vuex cross-file actions preserve active, direct and dynamic consumers', () => fixture(repo => {
+  repo.write('src/main.js', "import store from './root.js'; store.dispatch('user/load')")
+  repo.write('src/root.js', "import { createStore } from 'vuex'; import user from './store.js'; export default createStore({ modules: { user } })")
+  repo.write('src/store.js', `import { login, load, shared } from './api.js'
+export default { namespaced: true, actions: {
+  login() { login(); shared() }, load() { load(); shared() }
+} }`)
+  repo.write('src/api.js', "export const login = () => request('/login'); export const load = () => request('/load'); export const shared = () => request('/shared')")
+  repo.commit('Vuex actions')
+  const scan = () => Object.fromEntries(scanApi({ root: repo.root, project: 'p', config }).endpoints.map(e => [e.path, e.status]))
+  assert.deepEqual(scan(), { '/load': 'live', '/login': 'dead', '/shared': 'live' })
+  repo.write('src/main.js', "import store from './root.js'; import { login } from './api.js'; store.dispatch('user/load'); login()")
+  repo.commit('direct consumer')
+  assert.equal(scan()['/login'], 'live')
+  repo.write('src/main.js', "import store from './root.js'; store.dispatch(window.action)")
+  repo.commit('dynamic consumer')
+  assert.ok(Object.values(scan()).every(s => s === 'live'))
+}))
+
+test('Vuex mixed namespace registration never falsely marks active requests dead', () => fixture(repo => {
+  repo.write('src/main.js', "import store from './root.js'; store.dispatch('user/load')")
+  repo.write('src/root.js', "import { createStore } from 'vuex'; import parent from './parent.js'; export default createStore({ modules: { parent } })")
+  repo.write('src/parent.js', "import user from './store.js'; export default { modules: { user } }")
+  repo.write('src/store.js', `import { load } from './api.js'
+export default { namespaced: true, actions: { load() { load(); return request('/inline') } } }`)
+  repo.write('src/api.js', "export const load = () => request('/load')")
+  repo.commit('non-namespaced parent')
+  const r = scanApi({ root: repo.root, project: 'p', config })
+  assert.ok(r.endpoints.length === 2)
+  for (const e of r.endpoints) assert.equal(e.status, 'live', e.path)
+}))

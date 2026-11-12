@@ -169,7 +169,7 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
       const fn = fnName(s.owners)
       let state = defState(p.path, s.owners, fileState, usedNames.get(p.path))
       if (state.status === 'live' && !fileState) state = actionState(p, s) ?? state
-      if (state.status === 'live' && !fileState && inactiveActionOnly(p, s.owners)) state = { status: 'dead', reason: '所有已识别的引用均位于未被调用的 Pinia action；没有普通调用、同文件调用或自动导入用法' }
+      if (state.status === 'live' && !fileState && inactiveActionOnly(p, s.owners)) state = { status: 'dead', reason: '所有已识别的引用均位于未被调用的 store action；没有普通调用、同文件调用或自动导入用法' }
       let method = s.method
       let path = s.path
       let rule = s.rule
@@ -321,6 +321,7 @@ export function createActionChecker({ parsed, unreachable, callers, aliases, aut
       return { status: 'dead', reason: `store ${b} 在用，但${what}（找过 ${[...names].join('、')}() 的成员调用、解构、mapActions、模板里的写法）` }
     }
     if (site.vuexAction) {
+      if (!vuex.trustedNamespaces(p.path)) return null
       const all = vuex.nsAll(p.path)
       if (all.length === 0 || dispatch.dynamic) return null
       const ns = all.join('、')
