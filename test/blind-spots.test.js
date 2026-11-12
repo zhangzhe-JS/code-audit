@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRepo } from './helpers/repo.js'
 import { componentName, findComponentVarUses, findSameNameTags } from '../src/collect/global-components.js'
-import { exportNames, findAutoImports, findBareExportUses, findNameUses } from '../src/collect/auto-imports.js'
+import { autoNamesOf, exportNames, findAutoImports, findBareExportUses, findNameUses, usedAutoExports } from '../src/collect/auto-imports.js'
 import { findExternalMaybe, findExternalRefs, joinedPaths } from '../src/collect/external-refs.js'
 import { findCommentRefs, hashComments } from '../src/collect/comment-refs.js'
 import { findGlobImports, globTailRegex } from '../src/collect/glob-imports.js'
@@ -90,6 +90,24 @@ test('findGlobImports：换算不了的 glob 记进 unresolved，按模式匹配
 })
 
 // ---------- ④ 自动导入 ----------
+
+test('findAutoImports：登记的全局名可以和导出名不同（imports 里改了名）；没写导出名的是整个模块；按导出名算用到了哪些', () => {
+  const dts = [
+    'export {}',
+    'declare global {',
+    "  const ElMessage: typeof import('@/components/ProxyMessage/index')['ProxyMessage']",
+    "  const useTable: typeof import('@/composables/useTable')['useTable']",
+    "  const fmt: typeof import('@/utils/fmt')",
+    "  const unusedOne: typeof import('@/composables/useTable')['unusedOne']",
+    '}'
+  ].join('\n')
+  const sourceSet = new Set(['src/components/ProxyMessage/index.ts', 'src/composables/useTable.ts', 'src/utils/fmt.ts'])
+  const a = findAutoImports({ files: [{ path: 'src/auto-imports.d.ts', content: dts }], sourceSet, extensions: ['.ts'], aliases: { '@': 'src' } })
+  assert.deepEqual(Object.fromEntries(a.exports), { ElMessage: 'ProxyMessage', useTable: 'useTable', fmt: '*', unusedOne: 'unusedOne' })
+  const used = usedAutoExports(a, [{ path: 'src/a.ts', content: "ElMessage.success('ok')\nuseTable()\nfmt.date(1)\n" }])
+  assert.deepEqual([...used].sort(), ['src/components/ProxyMessage/index.ts#ProxyMessage', 'src/composables/useTable.ts#useTable', 'src/utils/fmt.ts#*'])
+  assert.deepEqual(autoNamesOf(a).get('src/components/ProxyMessage/index.ts#ProxyMessage'), ['ElMessage'])
+})
 
 test('findAutoImports、findNameUses：读出登记的本地函数（别名、补扩展名、目录 index），按名字找用法', () => {
   const dts = "declare global {\n  const useTable: typeof import('./composables/useTable')['useTable']\n  const ref: typeof import('vue')['ref']\n  const fmt: typeof import('@/utils/fmt')['fmt']\n}"

@@ -22,7 +22,8 @@ import { codeOf } from './source-text.js'
 import { resolveSpec } from './path-refs.js'
 import { templateOnly } from './global-components.js'
 
-const ENTRY = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)\s*:\s*\(?\s*typeof\s+import\(\s*(['"])([^'"]+)\2\s*\)/g
+// const 全局名: typeof import('路径')['导出名']：全局名可以和导出名不同（imports: [{ '@/x': [['ProxyMessage', 'ElMessage']] }]）
+const ENTRY = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)\s*:\s*\(?\s*typeof\s+import\(\s*(['"])([^'"]+)\2\s*\)(?:\s*\[\s*(['"])([^'"]+)\4\s*\])?/g
 
 /**
  * @param {object} opts
@@ -30,13 +31,15 @@ const ENTRY = /\b(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)\s*:\s*\(?\s*typ
  * @param {Set<string>} opts.sourceSet
  * @param {string[]} opts.extensions
  * @param {Record<string, string>} [opts.aliases]
- * @returns {{found: boolean, declarations: string[], names: Map<string, string>}}
- *   found：有没有自动导入的声明文件（不管登记的是不是本地的）；declarations：登记了本地函数的声明文件；names：名字 → 文件
+ * @returns {{found: boolean, declarations: string[], names: Map<string, string>, exports: Map<string, string>}}
+ *   found：有没有自动导入的声明文件（不管登记的是不是本地的）；declarations：登记了本地函数的声明文件；names：全局名 → 文件；
+ *   exports：全局名 → 文件里的导出名（没写 ['名字'] 的是整个模块，记 '*'）
  */
 export function findAutoImports({ files, sourceSet, extensions, aliases = {} }) {
   let found = false
   const declarations = []
   const names = new Map()
+  const exports = new Map()
   for (const { path, content } of files) {
     if (!path.endsWith('.d.ts') || !/\bdeclare\s+global\b/.test(content) || !/typeof\s+import\(/.test(content)) continue
     found = true
@@ -45,12 +48,38 @@ export function findAutoImports({ files, sourceSet, extensions, aliases = {} }) 
       const file = toFile(resolveSpec(m[3], path, aliases), sourceSet, extensions)
       if (file) {
         names.set(m[1], file)
+        exports.set(m[1], m[5] ?? '*')
         local++
       }
     }
     if (local > 0) declarations.push(path)
   }
-  return { found, declarations, names }
+  return { found, declarations, names, exports }
+}
+
+/**
+ * 自动导入里按名字被用到的导出：'文件#导出名'（整个模块被登记的是 '文件#*'）
+ * 按全局名逐个找：同一个文件登记了好几个名字，用到一个不代表都用到了
+ * @param {{names: Map<string, string>, exports: Map<string, string>}} autos  findAutoImports 的结果
+ * @param {{path: string, content: string}[]} files  在用的文件
+ */
+export function usedAutoExports(autos, files) {
+  const used = new Set()
+  for (const [name, file] of autos.names) {
+    const uses = findNameUses({ files, names: new Map([[name, file]]) })
+    if ((uses.get(file) ?? []).length > 0) used.add(`${file}#${autos.exports?.get(name) ?? '*'}`)
+  }
+  return used
+}
+
+/** 自动导入登记的全局名：'文件#导出名' → 全局名（可能有几个） */
+export function autoNamesOf(autos) {
+  const out = new Map()
+  for (const [name, file] of autos.names) {
+    const key = `${file}#${autos.exports?.get(name) ?? '*'}`
+    out.set(key, [...(out.get(key) ?? []), name])
+  }
+  return out
 }
 
 /**

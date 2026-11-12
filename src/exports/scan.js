@@ -31,7 +31,7 @@ import { findCommentRefs } from '../collect/comment-refs.js'
 import { findBranchRefs } from '../collect/branch-refs.js'
 import { globToRegExp } from '../collect/glob-imports.js'
 import { findDynamicLoads, inScope } from '../collect/dynamic-imports.js'
-import { findAutoImports, findNameUses } from '../collect/auto-imports.js'
+import { findAutoImports, usedAutoExports } from '../collect/auto-imports.js'
 import { git } from '../history/git.js'
 import { extractFile, loadParser, MODULE, TEMPLATE } from '../api/extract.js'
 import { usedBindings } from '../api/scan.js'
@@ -110,15 +110,9 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
 
   // 自动导入：登记了、并且按名字被用到的本地函数，knip 看不到（scan 只补了默认导入）
   const autos = findAutoImports({ files: declarations, sourceSet: new Set(allSources), extensions: config.extensions, aliases: config.aliases })
-  const autoUsed = new Set()
-  if (autos.names.size > 0) {
-    const liveFiles = parsed.filter((p) => !unreachable.has(p.path)).map((p) => ({ path: p.path, content: p.content }))
-    // 按名字逐个找：同一个文件登记了好几个名字，用到一个不代表都用到了
-    for (const [name, file] of autos.names) {
-      const uses = findNameUses({ files: liveFiles, names: new Map([[name, file]]) })
-      if ((uses.get(file) ?? []).length > 0) autoUsed.add(`${file}#${name}`)
-    }
-  }
+  const autoUsed = autos.names.size > 0 ? usedAutoExports(autos, parsed.filter((p) => !unreachable.has(p.path)).map((p) => ({ path: p.path, content: p.content }))) : new Set()
+  // 登记在自动导入里的导出（按导出名，全局名可以不同）
+  const autoRegistered = new Set([...autos.names].map(([g, f]) => `${f}#${autos.exports.get(g)}`))
 
   // 3. 候选：走得到的源码文件里，只用项目入口时没人用的导出
   const candidates = []
@@ -131,7 +125,7 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
     const effects = new Map([...(p.initCalls ?? [])].map(([n, calls]) => [n, calls.filter((c) => !isPureCall(c))]).filter(([, c]) => c.length > 0))
     const kept = closure(p, [...used, ...effects.keys()])
     for (const name of [...names].sort()) {
-      if (autoUsed.has(`${p.path}#${name}`)) continue
+      if (autoUsed.has(`${p.path}#${name}`) || autoUsed.has(`${p.path}#*`)) continue
       const local = [...p.bindings].find(([, b]) => b.exported.has(name))?.[0] ?? null
       const re = local === null ? p.reexports.find((r) => r.exported === name) : null
       if (local === null && !re) continue // 只在编译时存在的（type、interface）：不在导出维度里
@@ -159,7 +153,7 @@ export function scanExports({ root, project, config = DEFAULT_CONFIG, rev = 'HEA
       } else {
         item.evidence.push({ rule: 'no-internal-use', detail: '同文件里也没有代码引用它' })
       }
-      if (autos.names.get(name) === p.path) item.evidence.push({ rule: 'auto-import', tag: 'auto-import', detail: '自动导入的声明文件里登记了它，但代码里没有用到这个名字' })
+      if (autoRegistered.has(`${p.path}#${name}`) || autoRegistered.has(`${p.path}#*`)) item.evidence.push({ rule: 'auto-import', tag: 'auto-import', detail: '自动导入的声明文件里登记了它，但代码里没有用到这个名字' })
       candidates.push(item)
     }
   }

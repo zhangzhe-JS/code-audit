@@ -178,3 +178,19 @@ test('scanExports：没人用的导出初始化时执行了可能有副作用的
     repo.cleanup()
   }
 })
+
+test('scanExports：自动导入改了名（全局名 ElMessage → 导出 ProxyMessage），按全局名用到了就不是候选', () => {
+  const repo = createRepo()
+  try {
+    repo.write('package.json', JSON.stringify({ name: 'x', type: 'module' }))
+    repo.write('app/index.ts', "import './lib/msg'\nElMessage.success('ok')\n")
+    repo.write('app/lib/msg.ts', 'export const ProxyMessage = { success: (m: string) => m }\nexport const Other = 1\n')
+    repo.write('app/auto-imports.d.ts', "export {}\ndeclare global {\n  const ElMessage: typeof import('./lib/msg')['ProxyMessage']\n  const Gone: typeof import('./lib/msg')['Other']\n}\n")
+    repo.commit('init')
+    const r = scanExports({ root: repo.root, project: 'x', config: resolveConfig({ sourceRoots: ['app'], entries: ['app/index.ts'] }) })
+    assert.deepEqual(r.items.map((c) => `${c.name}:${c.status}`), ['Other:dead'])
+    assert.match(r.items[0].evidence.map((e) => e.detail).join(), /自动导入的声明文件里登记了它/)
+  } finally {
+    repo.cleanup()
+  }
+})

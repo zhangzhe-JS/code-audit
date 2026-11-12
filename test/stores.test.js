@@ -191,3 +191,48 @@ test('scanApi：请求写在 store 的 action 里，store 在用、action 没人
     repo.cleanup()
   }
 })
+
+test('scanApi：自动导入的本地函数（含改了名的）按名字用到就在用；Pinia 的 action 也认登记的全局名', () => {
+  const repo = createRepo()
+  try {
+    repo.write('package.json', JSON.stringify({ name: 'demo', type: 'module', dependencies: { pinia: '2.0.0' } }))
+    repo.write('src/utils/request.js', 'export default function request(config) { return fetch(config.url) }\n')
+    repo.write('src/api/auto.js', [
+      "import request from '../utils/request.js'",
+      "export const loadA = () => request({ url: '/auto/a' })",
+      "export const loadB = () => request({ url: '/auto/b' })",
+      "export const loadC = () => request({ url: '/auto/c' })"
+    ].join('\n'))
+    repo.write('src/stores/u.js', [
+      "import { defineStore } from 'pinia'",
+      "import request from '../utils/request.js'",
+      "export const useUserStore = defineStore('u', () => {",
+      "  const login = () => request({ url: '/u/login' })",
+      "  const logout = () => request({ url: '/u/logout' })",
+      '  return { login, logout }',
+      '})'
+    ].join('\n'))
+    repo.write('src/auto-imports.d.ts', [
+      'export {}',
+      'declare global {',
+      "  const loadA: typeof import('./api/auto.js')['loadA']",
+      "  const fetchB: typeof import('./api/auto.js')['loadB']",
+      "  const loadC: typeof import('./api/auto.js')['loadC']",
+      "  const useU: typeof import('./stores/u.js')['useUserStore']",
+      '}'
+    ].join('\n'))
+    repo.write('src/main.js', "import './api/auto.js'\nimport './stores/u.js'\nloadA()\nfetchB()\nuseU().login()\n")
+    repo.commit('init')
+    const config = resolveConfig({ entries: ['src/main.js'], api: { version: 1, calls: [{ call: 'request({url})', method: 'GET' }] } })
+    const r = scanApi({ root: repo.root, project: 'demo', config })
+    assert.deepEqual(Object.fromEntries(r.endpoints.map((e) => [e.path, e.status])), {
+      '/auto/a': 'live',
+      '/auto/b': 'live', // 改了名的
+      '/auto/c': 'dead', // 登记了没人用
+      '/u/login': 'live',
+      '/u/logout': 'dead'
+    })
+  } finally {
+    repo.cleanup()
+  }
+})

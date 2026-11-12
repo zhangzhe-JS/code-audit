@@ -27,6 +27,7 @@ import { endpointKey, isExternalPath, mayHit } from './normalize.js'
 import { createMenuFinder, vuexModuleResolver } from './menus.js'
 import { WHOLE_STORE } from './stores.js'
 import { findGlobalComponents, findTagUses } from '../collect/global-components.js'
+import { autoNamesOf, findAutoImports, usedAutoExports } from '../collect/auto-imports.js'
 
 export const API_SCHEMA_VERSION = 1
 
@@ -68,17 +69,26 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   const snap = createSnapshot(root, commit)
   let parsed
   let tagUses = new Map()
+  let autoUsed = new Set()
+  let autoNames = new Map()
   try {
     // 测试文件不分析：测试里的地址不是业务在用的接口
     const tests = new Set(snap.list(config.testEntries.map((p) => `:(glob)${p}`)))
     const sources = snap.list(config.sourceRoots).filter((f) => config.extensions.some((e) => f.endsWith(e)) && !f.endsWith('.d.ts') && !tests.has(f))
-    // 全局组件的声明文件（components.d.ts 等）：只在模板里写标签的组件靠它连上引用方，菜单归属要用
-    const declarations = config.menus.length > 0 ? snap.list(config.sourceRoots).filter((f) => f.endsWith('.d.ts')) : []
+    // 声明文件：全局组件（components.d.ts 等，只在模板里写标签的组件靠它连上引用方，菜单归属要用）、
+    // 自动导入（auto-imports.d.ts：不写 import 直接按名字用的本地函数，knip 看不到这种用法，导出会被当成没人用）
+    const declarations = snap.list(config.sourceRoots).filter((f) => f.endsWith('.d.ts'))
     snap.extract([...sources, ...declarations])
     const contents = sources.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
-    if (declarations.length > 0) {
-      const globals = findGlobalComponents({ files: declarations.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') })), sourceSet: new Set(sources), aliases: config.aliases })
+    const declFiles = declarations.map((path) => ({ path, content: readFileSync(join(snap.dir, path), 'utf8') }))
+    if (config.menus.length > 0 && declarations.length > 0) {
+      const globals = findGlobalComponents({ files: declFiles, sourceSet: new Set(sources), aliases: config.aliases })
       tagUses = findTagUses({ files: contents, components: globals.components })
+    }
+    const autos = findAutoImports({ files: declFiles, sourceSet: new Set(sources), extensions: config.extensions, aliases: config.aliases })
+    if (autos.names.size > 0) {
+      autoUsed = usedAutoExports(autos, contents.filter((c) => !unreachable.has(c.path)))
+      autoNames = autoNamesOf(autos)
     }
     parsed = contents.map(({ path, content }) => extractFile({
       parser,
@@ -97,7 +107,9 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   const usedNames = new Map()
   for (const p of parsed) {
     if (unreachable.has(p.path)) continue
-    usedNames.set(p.path, usedBindings(p, unusedExports.get(p.path) ?? new Set()))
+    // 自动导入里按名字用到的导出：knip 当成没人用，这里算回在用
+    const unused = new Set([...(unusedExports.get(p.path) ?? [])].filter((n) => !autoUsed.has(`${p.path}#${n}`) && !autoUsed.has(`${p.path}#*`)))
+    usedNames.set(p.path, usedBindings(p, unused))
   }
 
   // 引用方：谁 import 了定义所在的函数（只用于展示，不影响状态）
@@ -105,7 +117,7 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   // 走不到的文件里的引用方：没人用的定义「仍被没人用的文件引用」，history 要查的是这些文件什么时候失去入口
   const deadCallers = findCallers({ parsed, unreachable, aliases: config.aliases, onlyUnreachable: true })
   // 请求写在 store 的 action 里：store 在用、这个 action 没人调用的，定义判没人用
-  const actionState = createActionChecker({ parsed, unreachable, callers, aliases: config.aliases })
+  const actionState = createActionChecker({ parsed, unreachable, callers, aliases: config.aliases, autoNames })
 
   // 4. 定义 → 接口
   const wrapperNames = new Set(calls.map((c) => c.steps[0].name))
@@ -256,7 +268,7 @@ export function usedBindings(p, unused) {
  * - Vuex：模块要能从注册关系算出命名空间；项目里有算不出类型的派发（dispatch(变量)、mapActions(变量)）时都不判；
  *   不带命名空间的同名派发（dispatch('a')）也算调用了
  */
-export function createActionChecker({ parsed, unreachable, callers, aliases }) {
+export function createActionChecker({ parsed, unreachable, callers, aliases, autoNames = new Map() }) {
   const live = parsed.filter((p) => !unreachable.has(p.path))
   const usesByName = new Map()
   const dispatch = { plain: new Set(), ns: new Set(), dynamic: false, where: null }
@@ -278,6 +290,8 @@ export function createActionChecker({ parsed, unreachable, callers, aliases }) {
       const names = new Set([...(p.bindings.get(b)?.exported ?? [])].filter((e) => e !== 'default'))
       if (b !== 'default') names.add(b)
       for (const c of callers.get(`${p.path}#${b}`) ?? []) for (const l of c.locals) names.add(l)
+      // 自动导入：代码里写的是登记的全局名（可以和导出名不同）
+      for (const e of [...(p.bindings.get(b)?.exported ?? []), '*']) for (const g of autoNames.get(`${p.path}#${e}`) ?? []) names.add(g)
       if (names.size === 0 || [...names].some((n) => !isUse(n))) return null
       const used = new Set([...names].flatMap((n) => [...(usesByName.get(n) ?? [])]))
       if (used.has(WHOLE_STORE) || site.storeActions.some((a) => used.has(a))) return null
