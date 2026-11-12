@@ -41,7 +41,7 @@ export function toGlobs(extensions) {
  * @returns {Set<string>}
  */
 export function historicalPaths(root, file, rev = 'HEAD') {
-  const out = git(root, ['log', rev, '--follow', '--name-only', '--format=', '--', file])
+  const out = git(root, ['log', rev, '--follow', '--name-only', '--format=', '--', literalPath(file)])
   const paths = new Set(out.split('\n').filter(Boolean).map(plainPath))
   paths.add(file)
   return paths
@@ -202,7 +202,8 @@ export function buildTimeline(root, pattern, { rev = 'HEAD', exclude, extensions
       if (!touchesTarget && ![...prev].some((f) => renamed.has(f))) continue
     }
     // 粗筛用全部路径的文件名，确认时只认当时的路径
-    const now = refsAt(root, commit.hash, { terms: matcher.terms, isRef: matcherAt(commit.hash).isRef }, skip, extensions)
+    const here = newestFirst.find((p) => exists(root, commit.hash, p))
+    const now = refsAt(root, commit.hash, { terms: matcher.terms, isRef: matcherAt(commit.hash).isRef }, here, extensions)
 
     const added = [...now].filter((f) => !prev.has(f))
     const removed = [...prev].filter((f) => !now.has(f))
@@ -232,6 +233,10 @@ function exists(root, hash, path) {
   } catch {
     return false
   }
+}
+
+function literalPath(path) {
+  return `:(literal)${path}`
 }
 
 /**

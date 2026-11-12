@@ -45,7 +45,8 @@ export function findGlobImports({ files, aliases = {} }) {
     const code = codeOf(path, content)
     const inString = inStringAt(code)
 
-    for (const m of code.matchAll(/import\.meta\.glob(?:Eager)?\s*\(/g)) {
+    // Vite TypeScript projects often supply a result type: glob<{ default: View }>(...).
+    for (const m of code.matchAll(/import\.meta\.glob(?:Eager)?(?:\s*<[^()]*?>)?\s*\(/g)) {
       if (inString(m.index)) continue // 写在字符串里的：是文字，不是调用
       const line = lineAt(code, m.index)
       const args = readLiterals(code, m.index + m[0].length)

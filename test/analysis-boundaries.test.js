@@ -103,3 +103,29 @@ export default { namespaced: true, actions: { load() { load(); return request('/
   assert.ok(r.endpoints.length === 2)
   for (const e of r.endpoints) assert.equal(e.status, 'live', e.path)
 }))
+
+test('finite dynamic URL tables keep known endpoints and expose unresolved branches', () => fixture(repo => {
+  repo.write('src/main.js', "import { load } from './api.js'; load('load')")
+  repo.write('src/api.js', `const URLS = { load: '/load', save: '/save' }
+export const load = (name) => request(URLS[name])`)
+  repo.commit('url table')
+  const r = scanApi({ root: repo.root, project: 'p', config })
+  assert.ok(r.endpoints.some(e => e.path === '/load'))
+  assert.ok(r.coverage.dynamic.some(x => x.from === 'src/api.js' && x.partial === true))
+}))
+
+test('unique function fingerprint matches a cross-file move, ambiguous fingerprints stay separate', () => {
+  const base = { project: { name: 'p', rev: 'a' }, endpoints: [
+    { key: 'GET /old', method: 'GET', path: '/old', status: 'live', evidence: [{ detail: 'd' }], definitions: [{ file: 'src/old.js', line: 1, fn: 'load', state: 'live', fingerprint: 'same' }], callers: [] },
+    { key: 'GET /amb-a', method: 'GET', path: '/amb-a', status: 'live', evidence: [{ detail: 'd' }], definitions: [{ file: 'src/a.js', line: 1, fn: 'a', state: 'live', fingerprint: 'amb' }], callers: [] },
+    { key: 'GET /amb-b', method: 'GET', path: '/amb-b', status: 'live', evidence: [{ detail: 'd' }], definitions: [{ file: 'src/b.js', line: 1, fn: 'b', state: 'live', fingerprint: 'amb' }], callers: [] }
+  ] }
+  const after = { project: { name: 'p', rev: 'b' }, endpoints: [
+    { key: 'GET /new', method: 'GET', path: '/new', status: 'live', evidence: [{ detail: 'd' }], definitions: [{ file: 'src/new.js', line: 1, fn: 'loadNew', state: 'live', fingerprint: 'same' }], callers: [] },
+    { key: 'GET /amb-new', method: 'GET', path: '/amb-new', status: 'live', evidence: [{ detail: 'd' }], definitions: [{ file: 'src/new-a.js', line: 1, fn: 'x', state: 'live', fingerprint: 'amb' }], callers: [] }
+  ] }
+  const r = compareApi({ before: base, after })
+  assert.equal(r.findings.filter(f => f.kind === 'changed-address').length, 1)
+  assert.match(r.findings.find(f => f.kind === 'changed-address').detail, /src\/old\.js#load 改名成 loadNew/)
+  assert.ok(!r.findings.some(f => f.key === 'GET /amb-new' && f.kind === 'changed-address'))
+})

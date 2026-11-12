@@ -26,12 +26,21 @@ export function normalizePath(raw, { prefixes = [] } = {}) {
   let host = ''
   const full = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/]+)/i.exec(p)
   if (full) {
-    host = full[1].toLowerCase()
+    // 报告里不应保留 URL userinfo（https://user:pass@host/a）。
+    host = full[1].slice(full[1].lastIndexOf('@') + 1).toLowerCase()
     p = p.slice(full[0].length)
   }
   p = p.replace(/^(\{\})+(?=\/)/, '')
   if (!p.startsWith('/')) p = `/${p}`
   p = p.replace(/\/{2,}/g, '/')
+  // URL/path 的 . 和 .. 段不区分接口；不允许越过根目录。
+  const normalized = []
+  for (const segment of p.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') normalized.pop()
+    else normalized.push(segment)
+  }
+  p = `/${normalized.join('/')}`
   for (const prefix of host ? [] : [...prefixes].sort((a, b) => b.length - a.length)) {
     const pre = `/${prefix.replace(/^\/+|\/+$/g, '')}`
     if (pre === '/') continue
@@ -73,5 +82,5 @@ export function mayHit(pattern, path) {
   const a = pattern.split('/')
   const b = path.split('/')
   if (a.length !== b.length || !a.some((seg) => seg.includes('{}') && seg !== '{}')) return false
-  return a.every((seg, i) => seg === b[i] || (seg.includes('{}') && seg !== '{}' && new RegExp(`^${seg.split('{}').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.+')}$`).test(b[i])))
+  return a.every((seg, i) => seg === b[i] || (seg.includes('{}') && seg !== '{}' && new RegExp(`^${seg.split('{}').map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(b[i])))
 }

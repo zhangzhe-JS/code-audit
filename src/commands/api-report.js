@@ -8,7 +8,7 @@
  */
 import { parseArgs } from 'node:util'
 import { resolve } from 'node:path'
-import { assertEmptyDir, readJson, writeDirSafely } from '../core/output.js'
+import { assertEmptyDir, assertOutsideRepo, readJson, writeDirSafely } from '../core/output.js'
 import { buildApiReport, toCsv, toMarkdown, VERDICTS } from '../api/report.js'
 
 const USAGE = `用法：code-audit api-report --in <api.json> [--in <api.json> ...] --out <目录>
@@ -32,8 +32,10 @@ export async function run(argv) {
   if (values.help) return console.log(USAGE)
   if (!values.in?.length || !values.out) return fail(`缺少 --in 或 --out\n\n${USAGE}`)
   try {
+    const inputs = values.in.map((f) => readJson(f))
+    for (const input of inputs) assertOutsideRepo(values.out, input.project.root)
     assertEmptyDir(values.out)
-    const report = buildApiReport(values.in.map((f) => readJson(f)), values.in)
+    const report = buildApiReport(inputs, values.in)
     writeDirSafely(values.out, [
       { path: 'report.md', content: toMarkdown(report) },
       { path: 'endpoints.csv', content: toCsv(report) }

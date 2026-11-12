@@ -48,7 +48,7 @@ export function compareApi({ before, after, others = [], changed = null }) {
     const m = new Map()
     for (const e of r.endpoints) for (const d of e.definitions) {
       const id = `${d.file}#${d.fn}`
-      const x = m.get(id) ?? { file: d.file, fn: d.fn, keys: [], live: false }
+      const x = m.get(id) ?? { file: d.file, fn: d.fn, keys: [], live: false, fingerprint: d.fingerprint ?? null }
       if (!x.keys.includes(e.key)) x.keys.push(e.key)
       if (d.state === LIVE) x.live = true
       m.set(id, x)
@@ -91,6 +91,24 @@ export function compareApi({ before, after, others = [], changed = null }) {
     const [[id, now]] = added
     if (then.keys.some((k) => a.has(k)) || now.keys.some((k) => b.has(k))) continue
     report(id, then, now, then.fn)
+  }
+
+  // 跨文件搬迁或多个文件重排：只在指纹双向唯一时配对，避免把相似包装函数误认为同一个。
+  const removedAll = [...fnB].filter(([id]) => !fnA.has(id)).map(([, x]) => x)
+  const addedAll = [...fnA].filter(([id]) => !fnB.has(id)).map(([, x]) => x)
+  const unique = (xs, key) => {
+    const m = new Map()
+    for (const x of xs) if (x.fingerprint) m.set(x.fingerprint, [...(m.get(x.fingerprint) ?? []), x])
+    return new Map([...m].filter(([, v]) => v.length === 1).map(([k, v]) => [k, v[0]]))
+  }
+  const oldByFingerprint = unique(removedAll)
+  const newByFingerprint = unique(addedAll)
+  for (const [fingerprint, then] of oldByFingerprint) {
+    const now = newByFingerprint.get(fingerprint)
+    if (!now || then.file === now.file) continue
+    if (then.keys.some(k => a.has(k)) || now.keys.some(k => b.has(k))) continue
+    const id = `${now.file}#${now.fn}`
+    report(id, then, now, `${then.file}#${then.fn}`)
   }
 
   // 新增
@@ -136,7 +154,7 @@ export function compareApi({ before, after, others = [], changed = null }) {
   }
 
   // 覆盖报告：新出现的认不出的写法
-  const gapKey = (x) => `${x.from}|${x.shape ?? x.rule ?? ''}|${x.text ?? x.raw ?? x.path ?? ''}`
+  const gapKey = (x) => `${x.from}|${x.fn ?? ''}|${x.shape ?? x.rule ?? ''}|${x.text ?? x.raw ?? x.path ?? ''}`
   for (const kind of ['suspects', 'dynamic', 'wrappers', 'unknownMethod']) {
     const old = new Set((before.coverage?.[kind] ?? []).map(gapKey))
     for (const x of after.coverage?.[kind] ?? []) {

@@ -54,7 +54,7 @@ import { makeLocator, rewriteRelativePaths } from './rewrite.js'
  * @param {(path: string) => string|null} [opts.recaptured] 新位置会不会被重新加载（见 recapture.js）；不传就不查
  * @returns {QuarantinePlan}
  */
-export function buildPlan({ data, config, files, readFile, movedAt, branch, recaptured = () => null }) {
+export function buildPlan({ data, config, files, readFile, movedAt, branch, recaptured = () => null, isSymlink = () => false }) {
   const { layout, dirName } = config.quarantine
   const central = layout === 'central'
   const dir = central ? (config.quarantine.dir ?? `${config.sourceRoots[0]}/${dirName}`) : null
@@ -66,6 +66,7 @@ export function buildPlan({ data, config, files, readFile, movedAt, branch, reca
   const candidates = data.items.filter((i) => i.kind === 'file' && DELETABLE.includes(i.status))
   const byFile = new Map(candidates.map((i) => [i.target, i]))
   const reasonOf = (item) => {
+    if (isSymlink(item.target)) return '原文件是符号链接，隔离会跟随到仓库外，需人工处理'
     if (central && item.target.startsWith(`${dir}/`)) return '已经在隔离区里'
     if (item.target.split('/').slice(0, -1).includes(dirName)) return `已经隔离过（路径里有 ${dirName}）`
     if (!item.verify) return '没有实删验证（先跑 verify）'
@@ -73,6 +74,13 @@ export function buildPlan({ data, config, files, readFile, movedAt, branch, reca
     if (central && !item.target.startsWith(`${base}/`)) return `不在 quarantine.base（${base}）下，不知道放进隔离区哪里`
     const to = toOf(item.target)
     if (fileSet.has(to)) return `新位置已经有同名文件：${to}`
+    const parts = to.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join('/')
+      if (isSymlink(parent)) return `新位置的父目录是符号链接：${parent}`
+      if (fileSet.has(parent)) return `新位置的父路径被文件占用：${parent}`
+    }
+    if ([...fileSet].some((f) => f.startsWith(`${to}/`))) return `新位置被同名目录占用：${to}`
     const again = recaptured(to)
     if (again) return `挪到 ${to} 以后${again}，不能放这里`
     return null

@@ -37,6 +37,7 @@
  * @returns {Comparison}
  */
 export function compare(baseline, current, workDir) {
+  const dirs = typeof workDir === 'object' && !Array.isArray(workDir) ? workDir : { baseline: workDir, current: workDir }
   const problems = []
   const newLines = []
   const result = { passed: true, build: { ok: true, newWarnings: [] }, test: { newFailures: [] }, problems, newLines }
@@ -44,18 +45,18 @@ export function compare(baseline, current, workDir) {
   for (const step of Object.keys(current)) {
     const before = baseline[step]
     const after = current[step]
-    const beforeLines = new Set([...lines(before.output, workDir), ...lines(before.signals ?? '', workDir)])
-    const added = unique([...lines(after.output, workDir), ...lines(after.signals ?? '', workDir)]).filter((l) => !beforeLines.has(l))
+    const beforeLines = new Set([...lines(before.output, dirs.baseline), ...lines(before.signals ?? '', dirs.baseline)])
+    const added = unique([...lines(after.output, dirs.current), ...lines(after.signals ?? '', dirs.current)]).filter((l) => !beforeLines.has(l))
     newLines.push(...added)
 
     if (step === 'build') {
       result.build.ok = after.ok
       if (before.ok && !after.ok) problems.push(after.timedOut ? '构建超时' : `构建失败（退出码 ${after.exitCode}）`)
-      const was = new Set(warnings(full(before), workDir))
-      result.build.newWarnings = unique(warnings(full(after), workDir).filter((w) => !was.has(w)))
+      const was = new Set(warnings(full(before), dirs.baseline))
+      result.build.newWarnings = unique(warnings(full(after), dirs.current).filter((w) => !was.has(w)))
     } else if (step === 'test') {
-      const was = failures(full(before), workDir)
-      const now = failures(full(after), workDir)
+      const was = failures(full(before), dirs.baseline)
+      const now = failures(full(after), dirs.current)
       const old = new Set(was)
       result.test.newFailures = unique(now.filter((f) => !old.has(f)))
       if (result.test.newFailures.length > 0) problems.push(`新增失败的测试 ${result.test.newFailures.length} 个`)
@@ -76,8 +77,8 @@ export function compare(baseline, current, workDir) {
         }
       }
       // 删后用和基线同一种办法数：基线读的是汇总行就读汇总行，数的是 ✓ 就数 ✓；删后一个都数不出来按 0 算
-      const pb = passedCount(full(before), workDir)
-      const pa = pb ? passedCount(full(after), workDir, pb.by) : null
+      const pb = passedCount(full(before), dirs.baseline)
+      const pa = pb ? passedCount(full(after), dirs.current, pb.by) : null
       if (pb && pb.n > 0 && (pa?.n ?? 0) < pb.n) worse(`通过的测试变少了：${pb.n} → ${pa?.n ?? 0}${pa ? '' : '（删后认不出通过的用例）'}`)
     }
   }
@@ -98,8 +99,8 @@ function full(r) {
 export function passedCount(output, workDir, by = null) {
   const all = lines(output, workDir)
   if (by !== 'marks') {
-    const summary = all.filter((l) => /^Tests?:?\s/.test(l)).map((l) => l.match(/(\d+) passed/)).filter(Boolean).at(-1)
-    if (summary) return { n: Number(summary[1]), by: 'summary' }
+    const summary = all.filter((l) => /^(?:Tests?:?\s|#\s*pass\s)/i.test(l)).map((l) => l.match(/(?:#\s*pass\s+|(\d+)\s+passed\b)(\d+)?/i)).filter(Boolean).at(-1)
+    if (summary) return { n: Number(summary[2] ?? summary[1]), by: 'summary' }
     if (by === 'summary') return null
   }
   const marks = all.filter((l) => /^(PASS\b|[✓✔]\s)/.test(l)).length
@@ -116,15 +117,15 @@ export function lines(output, workDir) {
 
 /** 警告行：带 warn / warning 字样，或 rollup 的 (!) 开头 */
 export function warnings(output, workDir) {
-  return lines(output, workDir).filter((l) => /\bwarn(ing)?\b/i.test(l) || l.startsWith('(!)'))
+  return lines(output, workDir).filter((l) => /\bwarn(ing)?s?\b/i.test(l) || l.startsWith('(!)'))
 }
 
 /** 失败的测试 */
 export function failures(output, workDir) {
   return unique(
     lines(output, workDir)
-      .filter((l) => /^(FAIL\b|[✗×✕]\s)/.test(l))
-      .map((l) => l.replace(/^(FAIL|[✗×✕])\s+/, ''))
+      .filter((l) => /^(FAIL\b|not ok\b|[✗×✕]\s)/.test(l))
+      .map((l) => l.replace(/^(?:FAIL|not ok(?:\s+\d+)?\s*-?|[✗×✕])\s+/, ''))
   )
 }
 

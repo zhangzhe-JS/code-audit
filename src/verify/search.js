@@ -36,7 +36,7 @@
  * @param {(msg: string) => void} [opts.log]
  * @returns {Promise<SearchResult>}
  */
-export async function searchDeletions({ units, run, locate, maxRounds, log = () => {} }) {
+export async function searchDeletions({ units, run, locate, maxRounds, deadline = Infinity, log = () => {} }) {
   const good = []
   const bad = []
   const unverified = []
@@ -52,7 +52,7 @@ export async function searchDeletions({ units, run, locate, maxRounds, log = () 
     log(`第 ${rounds} 轮（${why}）：删 ${deleted.size} 个文件 → ${cmp.passed ? '通过' : `不通过：${cmp.problems.join('、')}`}`)
     return cmp
   }
-  const out = () => rounds >= maxRounds
+  const out = () => rounds >= maxRounds || Date.now() >= deadline
 
   // 1、2：全部删掉；不通过就按报错把嫌疑放回去
   let pending = [...units]

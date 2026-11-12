@@ -181,8 +181,10 @@ test('readmeContent：没有就新建；已有的原样保留，在最后追加�
   assert.match(created, /^# src\/utils\/_deprecated（隔离区）/)
   assert.match(created, /## 2026-11-09 隔离（code-audit，分支 qb）/)
   assert.match(created, /\| src\/utils\/_deprecated\/chart\/Area\.js \| src\/utils\/chart\/Area\.js \|/)
-  const appended = readmeContent('# 人工写的\n\n## 已恢复\n\n（暂无）\n\n\n', plan.readmes[0], { config, movedAt: '2026-11-09', branch: 'qb' })
-  assert.ok(appended.startsWith('# 人工写的\n\n## 已恢复\n\n（暂无）\n\n## 2026-11-09 隔离'))
+  const existing = '# 人工写的\n\n## 已恢复\n\n（暂无）\n\n\n'
+  const appended = readmeContent(existing, plan.readmes[0], { config, movedAt: '2026-11-09', branch: 'qb' })
+  assert.ok(appended.startsWith(existing), '已有 README 的字节内容不能被修剪')
+  assert.match(appended, /## 2026-11-09 隔离/)
 })
 
 // ---------- 执行 ----------

@@ -21,7 +21,8 @@ import {
 export function assertOutsideRepo(outPath, repoRoot) {
   const realRoot = realPath(repoRoot)
   const realOut = realPath(outPath)
-  const rel = relative(realRoot, realOut)
+  const comparable = (p) => process.platform === 'darwin' ? p.toLocaleLowerCase('en-US') : p
+  const rel = relative(comparable(realRoot), comparable(realOut))
   const inside = rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
   if (inside) {
     const via = realOut === resolve(outPath) ? '' : `（经符号链接实际指向 ${realOut}）`
@@ -70,6 +71,7 @@ export function pathExists(p) {
  */
 export function assertEmptyDir(dir) {
   if (!pathExists(dir)) return
+  if (lstatSync(dir).isSymbolicLink()) throw new Error(`输出位置不能是符号链接：${resolve(dir)}`)
   let isDir = false
   try {
     isDir = statSync(dir).isDirectory()
@@ -111,6 +113,7 @@ export function writeFileSafely(file, content) {
  */
 export function writeDirSafely(dir, files) {
   const target = resolve(dir)
+  if (pathExists(target) && lstatSync(target).isSymbolicLink()) throw new Error(`输出位置不能是符号链接：${target}`)
   mkdirSync(dirname(target), { recursive: true })
   // 临时目录和输出目录在同一个父目录下：同一个磁盘，改名是一次性完成的
   const tmp = mkdtempSync(join(dirname(target), `.${basename(target)}.tmp-`))
@@ -141,7 +144,7 @@ export function readJson(file) {
     throw new Error(`读不到文件：${resolve(file)}（${e.code ?? e.message}）`)
   }
   try {
-    return JSON.parse(text)
+    return JSON.parse(text.replace(/^\uFEFF/, ''))
   } catch (e) {
     throw new Error(`不是合法的 JSON：${resolve(file)}（${e.message}）`)
   }

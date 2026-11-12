@@ -77,7 +77,8 @@ function historyText(c) {
 export function exportsCsv(r) {
   const esc = (v) => {
     const s = String(v ?? '')
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    const formulaSafe = /^[=+\-@]/.test(s) ? `'${s}` : s
+    return /[",\n\r]/.test(formulaSafe) ? `"${formulaSafe.replace(/"/g, '""')}"` : formulaSafe
   }
   const lines = [['状态', '建议', '文件', '行', '导出名', '依据', '失去引用 / 定义提交', '处理意见'].map(esc).join(',')]
   for (const c of sorted(r.items)) {
@@ -101,7 +102,7 @@ export function exportsMarkdown(r, { now = new Date() } = {}) {
     if (list.length === 0) continue
     out.push(`## ${STATUS_TEXT[s]}（${list.length}）`, '', `建议：${EXPORT_SUGGESTIONS[s]}`, '')
     out.push('| 文件 | 导出名 | 依据 | 失去引用 / 定义提交 |', '| --- | --- | --- | --- |')
-    for (const c of list) out.push(`| \`${c.file}${c.line ? `:${c.line}` : ''}\` | \`${c.name}\` | ${cell(c.evidence.map((e) => e.detail).join('；'))} | ${cell(historyText(c))} |`)
+    for (const c of list) out.push(`| ${codeCell(`${c.file}${c.line ? `:${c.line}` : ''}`)} | ${codeCell(c.name)} | ${cell(c.evidence.map((e) => e.detail).join('；'))} | ${cell(historyText(c))} |`)
     out.push('')
   }
   return `${out.join('\n')}\n`
@@ -113,4 +114,8 @@ function sorted(list) {
 
 function cell(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, '<br>')
+}
+
+function codeCell(s) {
+  return `\`${String(s).replace(/`/g, '\\`').replace(/\|/g, '\\|')}\``
 }

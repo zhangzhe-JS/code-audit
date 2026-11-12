@@ -70,13 +70,15 @@ export async function run(argv) {
     if (errors.length > 0) throw new Error(`数据不符合格式：\n- ${errors.join('\n- ')}`)
 
     const movedAt = values['moved-at'] ?? today()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(movedAt)) throw new Error(`--moved-at 格式应为 YYYY-MM-DD：${movedAt}`)
+    if (!isDate(movedAt)) throw new Error(`--moved-at 必须是实际存在的 YYYY-MM-DD 日期：${movedAt}`)
     const from = currentBranch(root)
     const branch = from.startsWith('detached:') ? undefined : from
 
     // 计划按分析的提交算（和 scan、history、verify 看到的是同一份代码）
     const rev = data.project.rev
     const files = git(root, ['ls-tree', '-r', '-z', '--name-only', rev], { raw: true }).split('\0').filter(Boolean)
+    const tree = git(root, ['ls-tree', '-r', '-z', '--format=%(objectmode) %(path)', rev], { raw: true }).split('\0').filter(Boolean)
+    const modes = new Map(tree.map((entry) => [entry.slice(0, 6), entry.slice(7)]))
     const readFile = (p) => git(root, ['show', `${rev}:${p}`], { raw: true })
     const plan = buildPlan({
       data,
@@ -84,6 +86,7 @@ export async function run(argv) {
       files,
       readFile,
       recaptured: makeRecaptureCheck({ files, readFile, config }),
+      isSymlink: (path) => modes.get(path) === '120000',
       movedAt,
       branch
     })
@@ -98,6 +101,8 @@ export async function run(argv) {
     // 执行前检查
     const dirty = git(root, ['status', '--porcelain', '--untracked-files=no'])
     if (dirty) throw new Error(`目标项目的工作区有没提交的改动，先提交或处理掉再隔离：\n${dirty}`)
+    const hidden = git(root, ['ls-files', '-v']).split('\n').filter((line) => /^[a-zS]/.test(line))
+    if (hidden.length > 0) throw new Error(`目标项目存在 assume-unchanged 或 skip-worktree 文件，无法可靠回滚隔离：\n${hidden.join('\n')}`)
     const head = git(root, ['rev-parse', 'HEAD'])
     if (head !== rev) {
       throw new Error(`目标项目当前的提交 ${head} 不是分析时的提交 ${rev}：中间代码变了，结论可能已经不对。请切到 ${rev}，或对当前提交重新 scan、history、verify`)
@@ -154,6 +159,13 @@ function today() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function isDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
 }
 
 function fail(message) {

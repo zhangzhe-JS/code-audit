@@ -53,6 +53,15 @@ test('JS 类文件、html 里注释掉的不算（交给注释停用规则）', 
   assert.deepEqual(lines(r, 'src/old.js'), ['a.json:1', 'index.html:2'])
 })
 
+test('源码目录外的 SFC 只从脚本区域找引用', () => {
+  const r = find({
+    'docs/demo.vue': "<template>src/old.js</template>\n<script>import old from '../src/old.js'</script>",
+    'docs/demo.svelte': '<script>import old from "../src/old.js"</script>',
+    'docs/demo.astro': "---\nimport old from '../src/old.js'\n---"
+  }, ['src/old.js'])
+  assert.deepEqual(lines(r, 'src/old.js'), ['docs/demo.astro:2', 'docs/demo.svelte:1', 'docs/demo.vue:2'])
+})
+
 test('同一个文件里多处、多个候选', () => {
   const r = find({ 'c.js': "'src/a.js'\n'src/b.js'\n'src/a'\n" }, ['src/a.js', 'src/b.js', 'src/c.js'])
   assert.deepEqual(lines(r, 'src/a.js'), ['c.js:1', 'c.js:3'])

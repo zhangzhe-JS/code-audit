@@ -164,7 +164,7 @@ test('runSteps：按 build、test 的顺序跑配置了的步骤，完整输出�
 // ---------- 配置、命令 ----------
 
 test('verify 配置：默认没有命令、超时 30 分钟；只写一项也行；写错时报错', () => {
-  const none = { bundler: null, bundlerConfig: null }
+  const none = { bundler: null, bundlerConfig: null, maxSeconds: 7200 }
   assert.deepEqual(resolveConfig({}).verify, { build: null, test: null, timeoutSeconds: 1800, ...none })
   assert.deepEqual(resolveConfig({ verify: { build: 'npm run build' } }).verify, { build: 'npm run build', test: null, timeoutSeconds: 1800, ...none })
   assert.equal(resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: 'web/vite.config.ts' } }).verify.bundlerConfig, 'web/vite.config.ts')
@@ -177,6 +177,7 @@ test('verify 配置：默认没有命令、超时 30 分钟；只写一项也行
   assert.throws(() => resolveConfig({ verify: { build: 'b', bundler: 'vite', bundlerConfig: ['a.ts', 'a.ts'] } }), /不能为空、不能重复/)
   assert.throws(() => resolveConfig({ verify: { build: '' } }), /verify\.build 必须是命令字符串/)
   assert.throws(() => resolveConfig({ verify: { timeoutSeconds: 5 } }), /timeoutSeconds 必须是不小于 10 的整数/)
+  assert.throws(() => resolveConfig({ verify: { timeoutSeconds: 60, maxSeconds: 30 } }), /maxSeconds 必须是不小于 timeoutSeconds/)
   assert.throws(() => resolveConfig({ verify: { lint: 'x' } }), /verify 里不认识的字段：lint/)
   assert.throws(() => resolveConfig({ verify: 'npm run build' }), /verify 必须是对象/)
 })

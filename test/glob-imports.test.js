@@ -50,6 +50,11 @@ test('import.meta.globEager（旧写法）也认', () => {
   assert.deepEqual(r.globs.map((g) => g.resolved), ['src/x/*.js'])
 })
 
+test('import.meta.glob 支持 TypeScript 泛型，且不被前面的正则字面量干扰', () => {
+  const r = find('src/a.ts', "const quote = /'/\nconst pages = import.meta.glob<Record<string, unknown>>('./pages/*.vue')")
+  assert.deepEqual(r.globs.map((g) => g.resolved), ['src/pages/*.vue'])
+})
+
 test('参数是变量或带 ${} 的模板字符串：记警告，不猜', () => {
   const r = find('src/a.js', 'import.meta.glob(dir)\nimport.meta.glob(`./${lang}/*.js`)\n')
   assert.deepEqual(r.globs, [])

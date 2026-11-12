@@ -33,14 +33,19 @@ export function traceApiHistory({ root, result, config, maxCommits = 40, progres
   const cache = new Map()
   // 所有要查的函数名一起找候选提交、每个提交的 diff 只取一次：逐个查要把整个历史扫上百遍
   const names = new Set()
-  for (const ep of targets) for (const d of ep.definitions) if (DEAD.has(d.state) && !d.deadCallers?.length) names.add(d.fn.split('、')[0])
+  for (const ep of targets) for (const d of ep.definitions) if (DEAD.has(d.state) && !d.deadCallers?.length) for (const fn of d.fn.split('、')) names.add(fn)
   const ctx = createContext({ root, rev, config, names: [...names].filter((n) => n !== MODULE && n !== TEMPLATE && n !== 'default') })
   const newer = commitOrder(root, rev)
   targets.forEach((ep, i) => {
     for (const d of ep.definitions) {
       if (!DEAD.has(d.state)) continue
-      const fn = d.fn.split('、')[0]
+      const owners = d.fn.split('、')
+      const fn = owners[0]
       if (fn === MODULE || fn === TEMPLATE || fn === 'default') continue
+      if (owners.length > 1) {
+        d.history = { lostRef: null, introduced: null, unresolved: `定义属于多个顶层名称（${d.fn}），历史无法可靠归属到单一函数` }
+        continue
+      }
       const key = `${d.file}#${fn}`
       if (!cache.has(key)) {
         cache.set(key, d.deadCallers?.length > 0
@@ -124,6 +129,7 @@ export function traceDefinition({ root, rev, file, fn, config, maxCommits = 40, 
         // 同一个文件里删掉的调用（本文件内部在用的函数不再调用它）
         const own = removed.find((l) => word.test(l) && !declaration.test(l))
         if (own && !stillRefers(path)) return { lostRef: withBranch(root, { commit: commitInfo(root, c), from: path, text: own.trim().slice(0, 200), weak: false }, fn), introduced: null }
+        if (own) stillUsedBy ??= path
         continue
       }
       const hit = removed.find((l) => word.test(l))

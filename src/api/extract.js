@@ -9,6 +9,7 @@
  * - imports / reexports  用来找引用方
  */
 import { piniaStores, storeUses } from './stores.js'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { scriptOnly, SFC_EXTENSIONS } from '../collect/source-text.js'
@@ -81,6 +82,8 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
   const result = { path, sites: [], suspects: [], bindings: new Map(), declLines: new Map(), imports: [], reexports: [], importUses: new Map(), importWhole: new Map(), loadTime: new Set(), initCalls: new Map(), dynamicImports: [], storeUses: new Set(), storeActionUses: new Set(), storeModules: [], storeActions: [], storeDispatch: { plain: new Set(), dynamic: false }, piniaUses: new Map(), errors: [] }
 
   const program = parse(parser, path, code, isSfc ? sfcLang(content) : null, result.errors)
+  result.requestUrls = new WeakSet()
+  result.fingerprints = new Map()
   const ignore = [...DEFAULT_IGNORE_CALLS, ...ignoreCalls].map(globToRegExp)
 
   if (program) {
@@ -94,6 +97,21 @@ export function extractFile({ parser, path, content, calls, attrs = [], prefixes
     collectStoreActions(program, result, parser.visitorKeys)
     const consts = topLevelConsts(program)
     walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result, keys: parser.visitorKeys })
+    for (const top of program.body) {
+      const decl = ['ExportNamedDeclaration', 'ExportDefaultDeclaration'].includes(top.type) ? top.declaration : top
+      const pairs = decl?.type === 'VariableDeclaration' ? decl.declarations.map(d => [d.id.name, d.init]) : [[top.type === 'ExportDefaultDeclaration' ? 'default' : decl?.id?.name, decl]]
+      for (const [name, fn] of pairs) {
+        if (!name || !fn || !FUNCTIONS.has(fn.type)) continue
+        const canonical = n => {
+          if (!n || typeof n !== 'object') return n
+          if (result.requestUrls.has(n)) return { type: 'RequestAddress' }
+          if (Array.isArray(n)) return n.map(canonical)
+          return Object.fromEntries(Object.keys(n).sort().filter(k => !['start', 'end', 'loc', 'range', 'raw', 'comments'].includes(k)).map(k => [k, canonical(n[k])]))
+        }
+        const signature = JSON.stringify(canonical({ params: fn.params, body: fn.body, async: fn.async, generator: fn.generator }))
+        result.fingerprints.set(name, createHash('sha256').update(signature).digest('hex'))
+      }
+    }
     markStoreActions(program, result, parser.visitorKeys)
     collectActionImports(program, result, parser.visitorKeys)
     collectDynamicMembers(program, result, parser.visitorKeys)
@@ -347,7 +365,7 @@ function walkProgram({ program, consts, calls, prefixes, ignore, lineOf, result,
       if (n.type === 'Identifier') {
         if (isReference(n, parent, key) && !shadowed(n.name)) {
           if (topNames.has(n.name)) refs.add(n.name)
-          else if (importLocals.has(n.name)) {
+          if (importLocals.has(n.name)) {
             const asObject = parent?.type === 'MemberExpression' && key === 'object' && !parent.computed
             for (const o of useOwners) {
               addUse(result, n.name, o)
@@ -688,6 +706,9 @@ function collectLinks(n, result) {
         for (const a of names) a === null ? (result.storeDispatch.dynamic = true) : result.storeActionUses.add(`${ns}/${a}`)
       }
     }
+  } else if (n.type === 'MemberExpression' && n.computed && n.object.type === 'Identifier' && (n.object.name === 'rootGetters' || n.object.name === 'getters')) {
+    const v = stringValue(n.property)
+    if (v && v.includes('/')) result.storeUses.add(v.slice(0, v.lastIndexOf('/')))
   } else if (n.type === 'MemberExpression' && n.computed && n.object.type === 'MemberExpression' && !n.object.computed && n.object.property.name === 'getters') {
     const v = stringValue(n.property)
     if (v && v.includes('/')) result.storeUses.add(v.slice(0, v.lastIndexOf('/')))
@@ -733,6 +754,7 @@ function handleCall({ node, owners, scope, calls, prefixes, ignore, lineOf, resu
       const m = matchTemplate(rule.steps, flat)
       if (!m) continue
       markChain(node, consumed)
+      if (m.url && typeof m.url === 'object') result.requestUrls.add(m.url)
       const url = evaluateUrl(m.url, scope)
       const methods = resolveMethod(m.method, rule, scope) // null = 写了方法但算不出
       for (const s of sitesFor({ url, methods, prefixes })) result.sites.push({ line: lineOf(node.start), start: node.start, owners: [...owners], rule: rule.call, ...s })

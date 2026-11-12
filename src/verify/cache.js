@@ -17,11 +17,11 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { TOOL } from '../core/tool.js'
 
 /** 缓存格式的版本：结构变了就改，旧缓存自动作废 */
-const FORMAT = 1
+const FORMAT = 2
 /** 超过这么多天没用的缓存，写新缓存时顺手删掉 */
 const PRUNE_DAYS = 30
 
@@ -29,7 +29,10 @@ const PRUNE_DAYS = 30
 const DEPS_MARKERS = Object.freeze(['.modules.yaml', '.package-lock.json', '.yarn-state.yml', '.yarn-integrity'])
 
 export function cacheDir(env = process.env) {
-  if (env.CODE_AUDIT_CACHE_DIR) return join(env.CODE_AUDIT_CACHE_DIR, 'baseline')
+  if (env.CODE_AUDIT_CACHE_DIR) {
+    if (!isAbsolute(env.CODE_AUDIT_CACHE_DIR)) throw new Error('CODE_AUDIT_CACHE_DIR 必须是绝对路径，避免缓存写进被分析仓库')
+    return join(env.CODE_AUDIT_CACHE_DIR, 'baseline')
+  }
   const base = env.XDG_CACHE_HOME || join(homedir(), '.cache')
   return join(base, 'code-audit', 'baseline')
 }

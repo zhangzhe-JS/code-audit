@@ -35,7 +35,7 @@ export function evaluateUrl(node, scope) {
 
 function unwrap(node) {
   let n = node
-  while (n && (n.type === 'TSAsExpression' || n.type === 'TSNonNullExpression' || n.type === 'ParenthesizedExpression' || n.type === 'TSSatisfiesExpression' || n.type === 'TSTypeAssertion')) {
+  while (n && (n.type === 'TSAsExpression' || n.type === 'TSNonNullExpression' || n.type === 'ParenthesizedExpression' || n.type === 'TSSatisfiesExpression' || n.type === 'TSTypeAssertion' || n.type === 'ChainExpression')) {
     n = n.expression
   }
   return n
@@ -106,6 +106,45 @@ function evalStatic(init, scope, seen) {
 
 /** API.LIST、URLS.user.detail：常量对象里写死的属性 */
 function memberValue(node, scope, seen) {
+  // Resolve finite computed keys and nested constant tables without executing code.
+  const objects = (raw, visited = new Set()) => {
+    const n = unwrap(raw)
+    if (!n) return []
+    if (n.type === 'ObjectExpression') return [n]
+    if (n.type === 'Identifier') {
+      if (scope.params.has(n.name) || scope.opaque?.has(n.name) || visited.has(n.name)) return []
+      return objects(scope.consts.get(n.name), new Set([...visited, n.name]))
+    }
+    if (n.type !== 'MemberExpression') return []
+    return select(n, visited).flatMap(v => objects(v, visited))
+  }
+  const select = (n, visited) => {
+    const keys = n.computed ? evalNode(n.property, scope, seen) : [n.property.name]
+    const out = []
+    for (const obj of objects(n.object, visited)) {
+      // A spread/computed property/getter may override any earlier property.
+      if (obj.properties.some(p => p.type !== 'Property' || p.computed || p.kind !== 'init' || p.method)) continue
+      const props = new Map(obj.properties.map(p => [String(p.key.name ?? p.key.value), p.value]))
+      for (const key of keys) {
+        if (key === PARAM) out.push(...props.values(), null)
+        else out.push(props.get(key) ?? null)
+      }
+    }
+    return out
+  }
+  const root = (() => { let n = node; while (n?.type === 'MemberExpression') n = unwrap(n.object); return n })()
+  const marker = root?.type === 'Identifier' ? `member:${root.name}` : null
+  if (marker && seen.has(marker)) return null
+  if (marker) seen.add(marker)
+  try {
+    const values = select(node, new Set()).flatMap(v => v ? evalStatic(v, scope, seen) ?? [PARAM] : [PARAM])
+    const unique = [...new Set(values)]
+    return unique.length > MAX_VARIANTS ? [PARAM] : unique.length ? unique : null
+  } finally { if (marker) seen.delete(marker) }
+}
+
+/* Historical direct-member implementation retained below only until replacement. */
+function legacyMemberValue(node, scope, seen) {
   const path = []
   let cur = unwrap(node)
   while (cur.type === 'MemberExpression') {

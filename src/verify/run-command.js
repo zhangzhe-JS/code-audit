@@ -12,13 +12,14 @@
  */
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
 
 /** 内存里保留的开头、结尾各多少字符 */
 const HEAD_MAX = 256 * 1024
 const TAIL_MAX = 1792 * 1024
 
 /** 关键行：比较、定位要用的，整个输出里一行不漏地收集 */
-const SIGNAL = /\bwarn(ing)?\b|^\s*\(!\)|\berror\b|\bfail|^\s*(PASS\b|[✓✔✗×✕]\s)|^\s*Tests?:?\s|cannot|could not|not found|unresolved|resolve|ENOENT|无法|失败/i
+const SIGNAL = /\bwarn(ing)?s?\b|^\s*\(!\)|\berror\b|\bfail\b|^\s*(?:not ok\b|PASS\b|[✓✔✗×✕]\s|#\s*(?:tests|pass|fail|skipped|cancelled)\b)|^\s*Tests?:?\s|cannot|could not|not found|unresolved|resolve|ENOENT|无法|失败/i
 /** 关键行最多收多少（防止日志全是报错时占满内存） */
 const SIGNAL_MAX_LINES = 200000
 
@@ -54,6 +55,8 @@ export function runCommand(command, { cwd, timeoutSeconds, env = {}, logFile }) 
       env: { ...process.env, CI: '1', NO_COLOR: '1', FORCE_COLOR: '0', ...env }
     })
     const log = logFile ? createWriteStream(logFile) : null
+    let logError = null
+    log?.on('error', (e) => { logError = e })
     let head = ''
     let tail = ''
     let omitted = 0
@@ -81,9 +84,10 @@ export function runCommand(command, { cwd, timeoutSeconds, env = {}, logFile }) 
     // 按整行处理：颜色控制符、关键行都不会被切开。stdout、stderr 各留各的半行，不会拼到一起
     const reader = () => {
       let partial = ''
+      const decoder = new StringDecoder('utf8')
       return {
         data(chunk) {
-          const text = partial + chunk.toString('utf8')
+          const text = partial + decoder.write(chunk)
           const cut = text.lastIndexOf('\n')
           if (cut < 0) {
             partial = text
@@ -93,6 +97,7 @@ export function runCommand(command, { cwd, timeoutSeconds, env = {}, logFile }) 
           lines(text.slice(0, cut + 1))
         },
         flush() {
+          partial += decoder.end()
           if (partial) lines(`${partial}\n`)
           partial = ''
         }
@@ -110,11 +115,15 @@ export function runCommand(command, { cwd, timeoutSeconds, env = {}, logFile }) 
       setTimeout(() => killTree(child, 'SIGKILL'), 5000).unref()
     }, timeoutSeconds * 1000)
 
+    let finished = false
     const finish = (exitCode, extra = '') => {
+      if (finished) return
+      finished = true
       clearTimeout(timer)
       out.flush() // 最后一行没有换行
       err.flush()
       if (extra) lines(extra)
+      if (logError) lines(`\n[code-audit] 日志写入失败：${logError.message}\n`)
       if (tail.length > TAIL_MAX) {
         omitted += tail.length - TAIL_MAX
         tail = tail.slice(-TAIL_MAX)
@@ -134,7 +143,8 @@ export function runCommand(command, { cwd, timeoutSeconds, env = {}, logFile }) 
       else resolvePromise(result)
     }
     child.on('error', (e) => finish(null, `\n[code-audit] 命令启动失败：${e.message}\n`))
-    child.on('close', (code) => finish(code))
+    // exit 表示命令本身已结束；后代进程若继承了 stdout/stderr，close 可能无限等待。
+    child.on('exit', (code) => finish(code))
   })
 }
 

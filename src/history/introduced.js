@@ -54,7 +54,7 @@ export function traceOrigin(root, file, rev = 'HEAD', moves = 0) {
     '--date=short',
     `--format=${COMMIT_MARK}${COMMIT_FORMAT}`,
     '--',
-    file
+    `:(literal)${file}`
   ])
 
   const paths = [file]

@@ -3,7 +3,7 @@
  *
  * 删文件以后的结果要和基线比：基线里本来就有的失败、警告不算删文件引起的
  */
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { runCommand } from './run-command.js'
 import { collectModules, instrumentAll, workDirsOf } from './bundlers/index.js'
@@ -118,6 +118,7 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
         modules: hit.modules ? new Set(hit.modules) : null,
         exports: hit.exports ? new Map(Object.entries(hit.exports).map(([f, e]) => [f, { rendered: new Set(e.rendered), removed: new Set(e.removed) }])) : null,
         builds: hit.builds,
+        workDir: hit.workDir,
         cachedAt: hit.createdAt,
         bundlerDropped: hit.bundlerDropped ?? bundlerDropped
       }
@@ -153,9 +154,9 @@ export async function prepareBaseline({ root, ws, verify, useCache = true, cache
   }
   if (!results.build || results.build.ok) {
     const savedExports = exports ? Object.fromEntries([...exports].sort().map(([f, e]) => [f, { rendered: [...e.rendered].sort(), removed: [...e.removed].sort() }])) : null
-    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, exports: savedExports, builds, bundlerDropped, wrapper: WRAPPER_VERSION }, cacheDir), log)
+    safely(() => writeBaseline(key, { results, modules: modules ? [...modules].sort() : null, exports: savedExports, builds, workDir: realpathSync(ws.dir), bundlerDropped, wrapper: WRAPPER_VERSION }, cacheDir), log)
   }
-  return { results, modules, exports, builds, cachedAt: null, bundlerDropped }
+  return { results, modules, exports, builds, workDir: realpathSync(ws.dir), cachedAt: null, bundlerDropped }
 }
 
 /** 缓存读写出错（缓存目录没有权限、磁盘满等）：提示一下，当没有缓存 */

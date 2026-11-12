@@ -42,7 +42,7 @@ import { joinedPathOf } from './external-refs.js'
  * @property {string[]} [paths] 算得出的路径（require(path.join(ROOT, 'x'))）：这个文件、省略扩展名的写法、目录的 index；有它时只看它
  */
 
-const CALLS = /(?<![\w$.])(import|require\.context|require)\s*\(/g
+const CALLS = /(?<![\w$.])(import\.meta\.webpackContext|import|require\.ensure|require\.context|require)\s*\(/g
 const DYNAMIC = Symbol('dynamic')
 const EXPR_MAX = 80
 
@@ -55,7 +55,7 @@ const EXPR_MAX = 80
 export function findDynamicLoads({ files, aliases = {} }) {
   const loads = []
   for (const { path, content } of files) {
-    if (!/\b(import|require)\b/.test(content)) continue
+    if (!/\b(import|require|webpackContext)\b/.test(content)) continue
     const code = codeOf(path, content)
     const inString = inStringAt(code)
     for (const m of code.matchAll(CALLS)) {
@@ -63,12 +63,33 @@ export function findDynamicLoads({ files, aliases = {} }) {
       const call = readArgs(code, m.index + m[0].length)
       if (call === null || call.args.length === 0) continue
       const kind = m[1]
-      const scope = kind === 'require.context' ? contextScope(call.args, path, aliases) : concatScope(call.args[0], path, aliases)
+      const isArray = call.args[0]?.trim().startsWith('[')
+      const scope = kind === 'require.context'
+        ? contextScope(call.args, path, aliases)
+        : kind === 'require.ensure' || kind === 'import.meta.webpackContext' || (kind === 'require' && isArray)
+          ? arrayScope(call.args[0], path, aliases)
+          : concatScope(call.args[0], path, aliases)
       if (scope === STATIC) continue // 路径固定：knip 能处理
       loads.push({ from: path, line: lineAt(code, m.index), kind, expr: shorten(code.slice(m.index, call.end)), scope })
     }
   }
   return loads
+}
+
+function arrayScope(arg, from, aliases) {
+  const text = arg?.trim()
+  if (!text?.startsWith('[') || !text.endsWith(']')) return wideScope('', null)
+  const items = splitTopLevel(text.slice(1, -1), ',').map((item) => item.trim()).filter(Boolean)
+  if (items.length === 0) return wideScope('', null)
+  const paths = []
+  for (const item of items) {
+    const lit = literalOf(item)
+    if (lit === null) return wideScope('', null)
+    const resolved = resolvePattern(lit, from, aliases)
+    if (resolved === null) return wideScope('', null)
+    paths.push(resolved)
+  }
+  return { dir: '', wide: false, recursive: true, prefix: '', suffix: '', regex: null, paths }
 }
 
 /**

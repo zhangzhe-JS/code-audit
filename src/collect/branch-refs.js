@@ -13,6 +13,8 @@ import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { git } from '../history/git.js'
 import { findImportRefs } from './path-refs.js'
+import { findDynamicLoads, inScope } from './dynamic-imports.js'
+import { findGlobImports, globToRegExp as globImportToRegExp } from './glob-imports.js'
 
 /**
  * @typedef {object} BranchRef
@@ -106,6 +108,13 @@ export function findBranchRefs({ root, rev, targets, extensions, aliases = {}, b
       .map((c) => ({ path: c.path, content: git(root, ['show', `${hash}:${c.path}`], { raw: true }) }))
     for (const [target, list] of findImportRefs({ files, targets, aliases })) {
       for (const r of list) add(target, { branch, date, kind: 'import', from: r.from, line: r.line })
+    }
+    for (const load of findDynamicLoads({ files, aliases })) {
+      for (const target of targets) if (inScope(target, load.scope)) add(target, { branch, date, kind: 'import', from: load.from, line: load.line })
+    }
+    for (const glob of findGlobImports({ files, aliases }).globs) {
+      const re = globImportToRegExp(glob.resolved)
+      for (const target of targets) if (re.test(target)) add(target, { branch, date, kind: 'import', from: glob.from, line: glob.line })
     }
   }
   return { refs, checked, skipped, remotes }

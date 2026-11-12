@@ -10,7 +10,7 @@
  *
  * 调用前由命令检查：工作区干净、HEAD 就是分析的提交
  */
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, rmdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, rmdirSync, lstatSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { git } from '../history/git.js'
 import { renderQuarantineTable } from '../report/quarantine-table.js'
@@ -42,6 +42,10 @@ export function applyPlan({ root, plan, config, movedAt, branch, log = () => {} 
   const createdDirs = []
   const result = { moved: [], rewrites: [], headers: [], readmes: [] }
   try {
+    for (const m of plan.moves) {
+      assertNoSymlink(root, m.from)
+      assertNoSymlink(root, m.to, { allowMissing: true })
+    }
     // 移动：git mv，改名暂存好
     for (const m of plan.moves) {
       createdDirs.push(...missingDirs(root, dirname(m.to)))
@@ -58,7 +62,7 @@ export function applyPlan({ root, plan, config, movedAt, branch, log = () => {} 
     const locate = makeLocator(new Set([...files, ...moved.keys()]), config.extensions)
     for (const m of plan.moves) {
       const p = join(root, m.to)
-      const before = readFileSync(p, 'utf8')
+      const before = utf8Text(readFileSync(p), m.to)
       const r = rewriteRelativePaths({ content: before, from: m.from, to: m.to, moved, aliases: config.aliases, locate })
       let content = r.content
       result.rewrites.push(...r.changes.map((c) => ({ file: m.to, ...c })))
@@ -66,17 +70,18 @@ export function applyPlan({ root, plan, config, movedAt, branch, log = () => {} 
         content = insertHeader(content, m.header)
         result.headers.push(m.to)
       }
-      if (content !== before) writeFileSync(p, content)
+      if (content !== before) writeFileSync(p, content, 'utf8')
     }
 
     // 每个隔离目录的 README
     for (const r of plan.readmes) {
       const readme = join(root, r.path)
       const exists = existsSync(readme)
-      const before = exists ? readFileSync(readme, 'utf8') : null
+      assertNoSymlink(root, r.path, { allowMissing: true })
+      const before = exists ? readFileSync(readme) : null
       if (exists) originals.set(readme, before)
       else createdFiles.push(readme)
-      writeFileSync(readme, readmeContent(before, r, { config, movedAt, branch }))
+      writeFileSync(readme, readmeBufferContent(before, r, { config, movedAt, branch }))
       result.readmes.push({ path: r.path, created: !exists })
     }
     return result
@@ -130,6 +135,13 @@ export function insertHeader(content, header) {
     const nl = content.indexOf('\n')
     return nl < 0 ? `${content}\n${header}\n` : `${content.slice(0, nl + 1)}${header}\n${content.slice(nl + 1)}`
   }
+  if (content.startsWith('---\n')) {
+    const end = content.indexOf('\n---', 4)
+    if (end >= 0) {
+      const after = end + 4
+      return `${content.slice(0, after)}\n${header}\n${content.slice(after)}`
+    }
+  }
   return `${header}\n${content}`
 }
 
@@ -140,15 +152,8 @@ export function insertHeader(content, header) {
  * @param {{dir: string, moves: import('./plan.js').Move[]}} readme
  */
 export function readmeContent(existing, readme, { config, movedAt, branch }) {
-  // 清单表格：当前路径是新路径，原路径是最早的路径
-  const items = readme.moves.map((m) => ({
-    ...m.item,
-    id: `file:${m.to}`, // 表格的「文件」列按 id 显示
-    target: m.to,
-    history: m.item.history ? { ...m.item.history, paths: [m.to, ...(m.item.history.paths ?? [m.from])] } : null
-  }))
-  const section = [`## ${movedAt} 隔离（code-audit${branch ? `，分支 ${branch}` : ''}）`, '', renderQuarantineTable(items, { config }), ''].join('\n')
-  if (existing !== null) return `${existing.replace(/\s*$/, '')}\n\n${section}`
+  const section = readmeSection(readme, { config, movedAt, branch })
+  if (existing !== null) return `${existing}${existing.endsWith('\n') ? '\n' : '\n\n'}${section}`
   return [
     `# ${readme.dir}（隔离区）`,
     '',
@@ -161,4 +166,42 @@ export function readmeContent(existing, readme, { config, movedAt, branch }) {
     '',
     section
   ].join('\n')
+}
+
+function readmeSection(readme, { config, movedAt, branch }) {
+  // 清单表格：当前路径是新路径，原路径是最早的路径
+  const items = readme.moves.map((m) => ({
+    ...m.item,
+    id: `file:${m.to}`, // 表格的「文件」列按 id 显示
+    target: m.to,
+    history: m.item.history ? { ...m.item.history, paths: [m.to, ...(m.item.history.paths ?? [m.from])] } : null
+  }))
+  return [`## ${movedAt} 隔离（code-audit${branch ? `，分支 ${branch}` : ''}）`, '', renderQuarantineTable(items, { config }), ''].join('\n')
+}
+
+function readmeBufferContent(existing, readme, opts) {
+  const section = Buffer.from(readmeContent(null, readme, opts), 'utf8')
+  if (existing === null) return section
+  const separator = existing.length === 0 || existing[existing.length - 1] === 10 ? Buffer.from('\n') : Buffer.from('\n\n')
+  return Buffer.concat([existing, separator, Buffer.from(readmeSection(readme, opts), 'utf8')])
+}
+
+function utf8Text(buffer, file) {
+  const text = buffer.toString('utf8')
+  if (!buffer.equals(Buffer.from(text, 'utf8'))) throw new Error(`文件不是可逆 UTF-8，不能安全写入隔离头注释：${file}`)
+  return text
+}
+
+function assertNoSymlink(root, relativePath, { allowMissing = false } = {}) {
+  const parts = relativePath.split('/').filter(Boolean)
+  for (let i = 1; i <= parts.length; i++) {
+    const p = join(root, ...parts.slice(0, i))
+    try {
+      if (lstatSync(p).isSymbolicLink()) throw new Error(`隔离路径不能经过符号链接：${relativePath}`)
+    } catch (e) {
+      if (e.code === 'ENOENT' && allowMissing) continue
+      if (e.code === 'ENOENT') break
+      throw e
+    }
+  }
 }

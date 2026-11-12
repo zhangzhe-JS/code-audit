@@ -5,6 +5,7 @@
  * 默认值选的是最常见的约定，不是某个具体项目的约定
  */
 import { pathToFileURL } from 'node:url'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { STATUSES, STATUS_LABELS } from './schema.js'
 import { BUNDLERS as BUNDLER_ADAPTERS } from '../verify/bundlers/index.js'
@@ -131,7 +132,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 动态加载默认都不放过：人工确认过的才写进来
   reviewedDynamicLoads: Object.freeze([]),
   // verify 的命令没有默认值；超时默认 30 分钟（构建前还可能跑 lint）
-  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800, bundler: null, bundlerConfig: null }),
+  verify: Object.freeze({ build: null, test: null, timeoutSeconds: 1800, maxSeconds: 7200, bundler: null, bundlerConfig: null }),
   // 默认查所有没合并的分支：宁可多判 pending，也不把别的分支要用的文件判成死代码
   branches: Object.freeze({ ignore: Object.freeze([]), maxAgeDays: null }),
   // 隔离区：默认就近，放进文件所在目录下的 _deprecated
@@ -168,8 +169,8 @@ export function resolveConfig(overrides = {}) {
     config[key] = { ...DEFAULT_CONFIG[key], ...(isPlainObject(overrides[key]) ? overrides[key] : {}) }
   }
 
-  if (!Array.isArray(config.sourceRoots) || !config.sourceRoots.every(isRelativeDir)) {
-    errors.push('sourceRoots 必须是相对目录组成的数组，如 ["src"]，不能以 / 开头或结尾')
+  if (!Array.isArray(config.sourceRoots) || config.sourceRoots.length === 0 || !config.sourceRoots.every(isRelativeDir)) {
+    errors.push('sourceRoots 必须是非空的相对目录数组，如 ["src"]，不能以 / 开头或结尾')
   }
   if (
     !Array.isArray(config.extensions) ||
@@ -251,6 +252,9 @@ export function resolveConfig(overrides = {}) {
   }
   if (!Number.isInteger(config.verify.timeoutSeconds) || config.verify.timeoutSeconds < 10) {
     errors.push(`verify.timeoutSeconds 必须是不小于 10 的整数（秒）：${config.verify.timeoutSeconds}`)
+  }
+  if (!Number.isInteger(config.verify.maxSeconds) || config.verify.maxSeconds < config.verify.timeoutSeconds) {
+    errors.push(`verify.maxSeconds 必须是不小于 timeoutSeconds 的整数（秒）：${config.verify.maxSeconds}`)
   }
   if (config.verify.bundler !== null && !BUNDLERS.includes(config.verify.bundler)) {
     errors.push(`verify.bundler 只支持 ${BUNDLERS.join('、')}，不启用就不要写：${config.verify.bundler}`)
@@ -341,7 +345,10 @@ export function resolveConfig(overrides = {}) {
  * @returns {Promise<Readonly<Config>>}
  */
 export async function loadProfile(file) {
-  const mod = await import(pathToFileURL(resolve(file)).href)
+  const path = resolve(file)
+  const url = pathToFileURL(path)
+  url.searchParams.set('mtime', String(statSync(path).mtimeMs))
+  const mod = await import(url.href)
   if (mod.default === undefined) throw new Error(`配置文件没有 export default：${file}`)
   return resolveConfig(mod.default)
 }
@@ -360,7 +367,7 @@ export function isValidHashLength(n) {
 }
 
 /** verify 里可以写的字段 */
-const VERIFY_KEYS = Object.freeze(['build', 'test', 'timeoutSeconds', 'bundler', 'bundlerConfig'])
+const VERIFY_KEYS = Object.freeze(['build', 'test', 'timeoutSeconds', 'maxSeconds', 'bundler', 'bundlerConfig'])
 /** 支持的打包器：取自 src/verify/bundlers/ 里登记的适配器，只在那里维护 */
 export const BUNDLERS = Object.freeze(Object.keys(BUNDLER_ADAPTERS))
 
@@ -372,7 +379,7 @@ function isPlainObject(v) {
 }
 
 function isRelativeDir(v) {
-  return typeof v === 'string' && v !== '' && !v.startsWith('/') && !v.endsWith('/') && !v.includes('\\')
+  return typeof v === 'string' && v !== '' && !v.startsWith('/') && !v.endsWith('/') && !v.includes('\\') && !v.split('/').some((s) => s === '' || s === '.' || s === '..')
 }
 
 /** 相对仓库根目录的路径或 glob：不以 / 开头，不含 ..，用 / 分隔 */

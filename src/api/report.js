@@ -192,7 +192,8 @@ export function toCsv(report) {
   const header = ['结论', '方法', '路径', ...names, '使用菜单', '依据', '定义位置', '在用的引用方', '停用 / 定义提交', '后端处理意见']
   const esc = (v) => {
     const s = String(v ?? '')
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    const formulaSafe = /^[=+\-@]/.test(s) ? `'${s}` : s
+    return /[",\n\r]/.test(formulaSafe) ? `"${formulaSafe.replace(/"/g, '""')}"` : formulaSafe
   }
   const lines = [header.map(esc).join(',')]
   for (const r of report.rows) {
@@ -213,13 +214,13 @@ export function toCsv(report) {
 }
 
 export function toMarkdown(report, { now = new Date() } = {}) {
-  const names = report.projects.map((p) => p.name)
+  const names = report.projects.map((p) => tableCell(p.name))
   const count = (v) => report.rows.filter((r) => r.verdict === v).length
   const out = []
   out.push('# 接口排查报告', '')
   out.push(`生成时间：${now.toISOString().slice(0, 10)}　工具：code-audit api`, '')
   out.push('| 项目 | 提交 | 规则版本 | 查了历史 | 覆盖报告没补的规则 |', '| --- | --- | --- | --- | --- |')
-  for (const p of report.projects) out.push(`| ${p.name} | ${p.rev.slice(0, 8)} | ${p.rules} | ${p.historyTraced ? '是' : '否'} | ${p.gaps} |`)
+  for (const p of report.projects) out.push(`| ${tableCell(p.name)} | ${p.rev.slice(0, 8)} | ${p.rules} | ${p.historyTraced ? '是' : '否'} | ${p.gaps} |`)
   out.push('', '## 结论汇总', '', '| 结论 | 接口数 | 含义 |', '| --- | --- | --- |')
   const meaning = {
     在用: '有项目在调用，不能删',
@@ -234,7 +235,7 @@ export function toMarkdown(report, { now = new Date() } = {}) {
   if (live.length > 0 && live.some((r) => Object.values(r.menus).some((m) => m !== null))) {
     out.push(`## 在用（${live.length}）`, '')
     out.push(`| 方法 | 路径 | ${names.join(' | ')} | 使用菜单 |`, `| --- | --- | ${names.map(() => '---').join(' | ')} | --- |`)
-    for (const r of live) out.push(`| ${r.method} | \`${r.path}\` | ${names.map((n) => (r.statuses[n] ? STATUS_TEXT[r.statuses[n]] ?? r.statuses[n] : '—')).join(' | ')} | ${cell(menuText(r))} |`)
+    for (const r of live) out.push(`| ${r.method} | ${codeCell(r.path)} | ${report.projects.map((p) => (r.statuses[p.name] ? STATUS_TEXT[r.statuses[p.name]] ?? r.statuses[p.name] : '—')).join(' | ')} | ${cell(menuText(r))} |`)
     out.push('')
   }
   for (const v of VERDICTS.slice(1)) {
@@ -243,7 +244,7 @@ export function toMarkdown(report, { now = new Date() } = {}) {
     out.push(`## ${v}（${rows.length}）`, '')
     out.push(`| 方法 | 路径 | ${names.join(' | ')} | 依据 | 停用 / 定义提交 |`, `| --- | --- | ${names.map(() => '---').join(' | ')} | --- | --- |`)
     for (const r of rows) {
-      out.push(`| ${r.method} | \`${r.path}\` | ${names.map((n) => (r.statuses[n] ? STATUS_TEXT[r.statuses[n]] ?? r.statuses[n] : '—')).join(' | ')} | ${cell(r.reasons.join('；'))} | ${cell(r.history.map((h) => `${h.project}：${historyText(h)}`).join('<br>'))} |`)
+      out.push(`| ${r.method} | ${codeCell(r.path)} | ${report.projects.map((p) => (r.statuses[p.name] ? STATUS_TEXT[r.statuses[p.name]] ?? r.statuses[p.name] : '—')).join(' | ')} | ${cell(r.reasons.join('；'))} | ${cell(r.history.map((h) => `${h.project}：${historyText(h)}`).join('<br>'))} |`)
     }
     out.push('')
   }
@@ -252,4 +253,12 @@ export function toMarkdown(report, { now = new Date() } = {}) {
 
 function cell(s) {
   return String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, '<br>')
+}
+
+function tableCell(s) {
+  return cell(s).replace(/`/g, '\\`')
+}
+
+function codeCell(s) {
+  return `\`${String(s).replace(/`/g, '\\`').replace(/\|/g, '\\|')}\``
 }

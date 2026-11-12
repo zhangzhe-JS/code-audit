@@ -21,19 +21,19 @@
  */
 import { posix } from 'node:path'
 import { stripComments } from './strip-comments.js'
-import { lineAt } from './source-text.js'
+import { codeOf, lineAt } from './source-text.js'
 import { buildLookup, resolveSpec } from './path-refs.js'
 
 /** 要搜的文本文件类型 */
 export const EXTERNAL_EXTENSIONS = Object.freeze([
   '.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx',
-  '.json', '.html', '.yml', '.yaml', '.sh'
+  '.vue', '.svelte', '.astro', '.json', '.html', '.yml', '.yaml', '.sh'
 ])
 
 /** 锁文件很大，只有包名，不会写源码路径 */
 const LOCK_FILES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock'])
 
-export const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx']
+export const JS_LIKE = ['.js', '.cjs', '.mjs', '.ts', '.cts', '.mts', '.jsx', '.tsx', '.vue', '.svelte', '.astro']
 const SNIPPET_MAX = 80
 
 /**
@@ -101,7 +101,7 @@ export function findExternalRefs({ files, targets, aliases = {}, isDir = () => f
   }
   for (const { path, content } of files) {
     const code = JS_LIKE.some((e) => path.endsWith(e))
-      ? stripComments(content)
+      ? stripComments(codeOf(path, content))
       : path.endsWith('.html')
         ? stripHtmlComments(content)
         : content
@@ -213,7 +213,7 @@ export function findExternalMaybe({ files, targets, found }) {
     .filter((t) => !found.has(t) && !/^index\./.test(posix.basename(t)))
     .map((t) => ({ target: t, re: new RegExp(`(["'\`])[^"'\`\n]*(?<![\\w.-])${escape(posix.basename(t))}\\1`, 'g') }))
   for (const { path, content } of files) {
-    const code = JS_LIKE.some((e) => path.endsWith(e)) ? stripComments(content) : content
+    const code = JS_LIKE.some((e) => path.endsWith(e)) ? stripComments(codeOf(path, content)) : content
     for (const { target, re } of names) {
       for (const m of code.matchAll(re)) {
         const line = lineAt(code, m.index)

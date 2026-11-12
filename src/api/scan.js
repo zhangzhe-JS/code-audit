@@ -50,18 +50,25 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
   if (!config.api) throw new Error('profile 里没有 api 规则：先写清楚请求是怎么发出去的（api.calls），见 profiles/example.js')
   const calls = compileCalls(config.api)
 
-  // 1. 文件维度：测试入口不算（测试里调用的接口不是业务在用）
+  // 1. 文件维度：保留测试入口，让文件扫描能区分 test-only；API 报告仍不把它当业务 live。
+  const unusedRuns = new Set()
   let lastRun = null
   const capture = (args) => {
-    lastRun = run({ ...args, exports: true })
-    return lastRun
+    const result = run({ ...args, exports: true })
+    lastRun = result
+    for (const file of result.unusedFiles) unusedRuns.add(file)
+    return result
   }
-  const files = scanFiles({ root, project, config: { ...config, testEntries: [] }, rev, knipDir, run: capture })
+  const files = scanFiles({ root, project, config, rev, knipDir, run: capture })
   const commit = files.candidates.rev
-  // 走不到的文件：以 knip 的结果为准（scanIgnore 匹配的文件不列为候选，但同样走不到）；有候选状态的用候选的
+  // 走不到的文件：候选保留 scan 的状态（包括 test-only）。scanIgnore 不产生候选，
+  // 不能据此断言没人用，保守记 unknown。
   const candidateOf = new Map(files.candidates.files.map((f) => [f.file, f]))
-  const unreachable = new Map(lastRun.unusedFiles.map((f) => [f, candidateOf.get(f) ?? { file: f, status: 'dead', evidence: [{ detail: '从入口走不到（scanIgnore 匹配，没有列为文件候选）' }] }]))
-  const unusedExports = lastRun.unusedExports ?? new Map()
+  const unreachable = new Map([...candidateOf])
+  for (const file of unusedRuns) {
+    if (!unreachable.has(file)) unreachable.set(file, { file, status: 'unknown', evidence: [{ detail: '从入口走不到，但被 scanIgnore 排除，不能据此判断没人用' }] })
+  }
+  const unusedExports = lastRun?.unusedExports ?? new Map()
 
   // 2. 解析源码
   const knip = findKnip(knipDir)
@@ -201,8 +208,9 @@ export function scanApi({ root, project, config = DEFAULT_CONFIG, rev = 'HEAD', 
         if (!(fileState && ['dead', 'dead-only-ref'].includes(fileState.status))) coverage.unknownMethod.push({ from: p.path, line: s.line, fn, rule, path, live: state.status === 'live' })
         continue
       }
-      const dc = state.status === 'live' ? [] : (deadCallers.get(`${p.path}#${s.owners[0]}`) ?? []).map((c) => c.from).filter((f) => f !== p.path)
-      addDef(endpointKey(method, path), method, path, { file: p.path, line: s.line, fn, rule, raw: s.raw, state: state.status, reason: state.reason, ...(note ? { note } : {}), ...(dc.length > 0 ? { deadCallers: dc } : {}) })
+      const dc = state.status === 'live' ? [] : [...new Set(s.owners.flatMap((owner) => (deadCallers.get(`${p.path}#${owner}`) ?? []).map((c) => c.from)).filter((f) => f !== p.path))]
+      const fingerprint = s.owners.length === 1 ? p.fingerprints.get(s.owners[0]) : null
+      addDef(endpointKey(method, path), method, path, { file: p.path, line: s.line, fn, rule, raw: s.raw, state: state.status, reason: state.reason, ...(fingerprint ? { fingerprint } : {}), ...(note ? { note } : {}), ...(dc.length > 0 ? { deadCallers: dc } : {}) })
     }
   }
   manual.forEach((m, i) => usedManual.has(i) || coverage.unusedManual.push(m))
@@ -390,7 +398,7 @@ function finishEndpoint(ep, callers) {
   }
   const cs = []
   for (const d of ep.definitions) {
-    for (const c of callers.get(`${d.file}#${d.fn.split('、')[0]}`) ?? []) {
+    for (const owner of d.fn.split('、')) for (const c of callers.get(`${d.file}#${owner}`) ?? []) {
       if (!cs.some((x) => x.from === c.from)) cs.push(c)
     }
   }

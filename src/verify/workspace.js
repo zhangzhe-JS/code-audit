@@ -11,8 +11,8 @@
  * 工作目录里没有 .git：构建脚本要读 git 信息的项目，基线就会失败，verify 会如实报出来
  */
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, lstatSync, mkdirSync, realpathSync, renameSync } from 'node:fs'
-import { dirname, join, posix } from 'node:path'
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, renameSync } from 'node:fs'
+import { dirname, isAbsolute, join, posix } from 'node:path'
 import { createSnapshot } from '../collect/snapshot.js'
 
 /**
@@ -49,6 +49,7 @@ export function createWorkspace({ root, rev = 'HEAD', copyDir = cloneDir }) {
       const dst = join(snap.dir, d, 'node_modules')
       mkdirSync(dirname(dst), { recursive: true })
       deps.push({ dir: d, method: copyDir(real, dst) })
+      assertNoAbsoluteSymlinks(dst)
     }
     // 删掉的文件挪到工作目录外面的 removed/，放回时再挪回来：不用重新导出
     const removedDir = join(dirname(snap.dir), 'removed')
@@ -74,6 +75,17 @@ export function createWorkspace({ root, rev = 'HEAD', copyDir = cloneDir }) {
   } catch (e) {
     snap.cleanup()
     throw e
+  }
+}
+
+function assertNoAbsoluteSymlinks(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isSymbolicLink()) {
+      if (isAbsolute(readlinkSync(path))) throw new Error(`依赖里有绝对符号链接，无法安全验证：${path}`)
+    } else if (entry.isDirectory()) {
+      assertNoAbsoluteSymlinks(path)
+    }
   }
 }
 

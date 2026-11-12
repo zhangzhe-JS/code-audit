@@ -5,7 +5,7 @@
  */
 import { parseArgs } from 'node:util'
 import { resolve } from 'node:path'
-import { assertEmptyDir, readJson, writeDirSafely } from '../core/output.js'
+import { assertEmptyDir, assertOutsideRepo, readJson, writeDirSafely } from '../core/output.js'
 import { exportsCsv, exportsMarkdown, validateExportsResult } from '../exports/report.js'
 
 const USAGE = `用法：code-audit exports-report --in <exports.json> --out <目录>
@@ -22,8 +22,9 @@ export async function run(argv) {
   if (values.help) return console.log(USAGE)
   if (!values.in || !values.out) return fail(`缺少 --in 或 --out\n\n${USAGE}`)
   try {
-    assertEmptyDir(values.out)
     const r = readJson(values.in)
+    assertOutsideRepo(values.out, r.project.root)
+    assertEmptyDir(values.out)
     const errors = validateExportsResult(r)
     if (errors.length > 0) throw new Error(`结果格式不对，没有生成报告：\n  - ${errors.slice(0, 20).join('\n  - ')}`)
     writeDirSafely(values.out, [{ path: 'report.md', content: exportsMarkdown(r) }, { path: 'exports.csv', content: exportsCsv(r) }])

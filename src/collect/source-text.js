@@ -119,6 +119,7 @@ export function inStringAt(code) {
     while (i < code.length) {
       const c = code[i]
       if (c === "'" || c === '"' || c === '`') i = scan(i + 1, c)
+      else if (c === '/' && isRegexStart(code, i)) i = skipRegex(code, i + 1)
       else if (inTemplate && c === '{') {
         depth++
         i++
@@ -132,4 +133,28 @@ export function inStringAt(code) {
   }
   skipCode(0, false)
   return (index) => ranges.some(([a, b]) => index >= a && index < b)
+}
+
+function isRegexStart(code, i) {
+  for (let p = i - 1; p >= 0; p--) {
+    if (/\s/.test(code[p])) continue
+    return /[=(:,;!&|?{[}]/.test(code[p])
+  }
+  return true
+}
+
+function skipRegex(code, i) {
+  let bracket = false
+  while (i < code.length) {
+    if (code[i] === '\\') i += 2
+    else if (code[i] === '[') { bracket = true; i++ }
+    else if (code[i] === ']') { bracket = false; i++ }
+    else if (code[i] === '/' && !bracket) {
+      i++
+      while (/[a-z]/i.test(code[i] ?? '')) i++
+      return i
+    } else if (code[i] === '\n') return i
+    else i++
+  }
+  return i
 }

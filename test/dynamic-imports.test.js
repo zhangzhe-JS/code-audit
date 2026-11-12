@@ -109,6 +109,19 @@ test('require.context：目录不是字符串时范围是整个仓库，按正�
   assert.equal(c.regex, null)
 })
 
+test('require.ensure、AMD 数组和 webpackContext 的固定数组都保护数组里的文件', () => {
+  const loads = find('src/a.js', [
+    "require.ensure(['./a.js', './b.vue'], () => {})",
+    "require(['./c.js'], () => {})",
+    "import.meta.webpackContext(['./d.js'])"
+  ].join('\n'))
+  assert.deepEqual(loads.map((l) => l.scope.paths), [
+    ['src/a.js', 'src/b.vue'],
+    ['src/c.js'],
+    ['src/d.js']
+  ])
+})
+
 test('注释里的、.vue 模板里的不算；import.meta.glob、obj.import() 不算', () => {
   const js = ["// import(`./a/${x}`)", '/** @param {import(\'axios\').X} a */', 'import.meta.glob(`./x/*.js`)', 'loader.import(`./b/${y}`)'].join('\n')
   assert.deepEqual(find('src/a.js', js), [])

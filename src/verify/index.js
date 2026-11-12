@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { createWorkspace } from './workspace.js'
 import { prepareBaseline, runSteps } from './baseline.js'
 import { runCommand } from './run-command.js'
-import { compare } from './signals.js'
+import { compare, failures, passedCount } from './signals.js'
 import { locate } from './locate.js'
 import { searchDeletions } from './search.js'
 import { validate } from '../core/schema.js'
@@ -69,7 +69,13 @@ export async function verifyReport({ data, root, config, log = () => {}, maxRoun
     if (baseline.build && !baseline.build.ok) {
       throw new Error('基线构建就失败了，无法判断删文件有没有影响。先用 verify（不带 --in）试跑，确认构建命令能跑通')
     }
-    if (baseline.test && !baseline.test.ok) log('  基线测试本来就有失败：按「新增失败的测试」比较')
+    if (baseline.test && !baseline.test.ok) {
+      const baseOutput = baseline.test.signals || baseline.test.output
+      if (failures(baseOutput, base.workDir).length === 0 && passedCount(baseOutput, base.workDir) === null) {
+        throw new Error('基线测试失败且无法识别测试结果，无法安全比较。请先修复测试命令或换能输出用例结果的 reporter')
+      }
+      log('  基线测试本来就有失败：按「新增失败的测试」比较')
+    }
 
     // 打包器加载过、静态分析却说「当前构建用不到」的：判 unknown，要删的不删
     const contradicted = base.modules ? result.items.filter((i) => i.kind === 'file' && CLAIMS_UNUSED.includes(i.status) && base.modules.has(i.target)) : []
@@ -115,8 +121,9 @@ export async function verifyReport({ data, root, config, log = () => {}, maxRoun
       log,
       run: async (deleted) => {
         ws.setRemoved(deleted)
-        return compare(baseline, await steps(), workDirs)
+        return compare(baseline, await steps(), { baseline: [base.workDir], current: workDirs })
       },
+      deadline: Date.now() + config.verify.maxSeconds * 1000,
       locate: (cmp, deleted) =>
         locate({
           newLines: cmp.newLines,
